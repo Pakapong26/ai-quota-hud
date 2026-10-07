@@ -6,6 +6,17 @@ A sci-fi desktop widget for Windows that shows how much of your AI coding quota 
 
 > ไทย: ดูหัวข้อ [ภาษาไทย](#ภาษาไทย) ด้านล่าง · Looking for CPU/GPU monitoring? See [system-hud-widget](https://github.com/Pakapong26/system-hud-widget).
 
+## Download
+
+**[⬇ Latest release (prebuilt Windows zip)](https://github.com/Pakapong26/ai-quota-hud/releases/latest)**: no build needed.
+
+- `…-standalone.zip`: just unzip and run `QuotaWidget.exe` (needs Python 3 only)
+- `…-framework.zip`: tiny, needs the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) + Python 3
+
+Keep `collector.py` next to the exe. Right-click the widget for settings. Windows SmartScreen may warn because the exe is unsigned; build from source below if you prefer.
+
+Feature request or bug? [Open an issue](https://github.com/Pakapong26/ai-quota-hud/issues), all ideas welcome.
+
 ## It uses zero quota
 
 It never calls a model. It only reads what the tools already write:
@@ -30,7 +41,7 @@ It never opens `auth.json` or any credential file. The xKiro key stays on the ma
 
 ![Light theme](docs/quota-widget-light.png)
 
-## Build and run
+## Build from source
 
 Needs the .NET 8 SDK and Python 3 on Windows 10/11.
 
@@ -71,7 +82,14 @@ For xKiro put the key in `~/.config/xkiro/key` (or set `XKIRO_KEY_FILE`), and se
 - ตรวจจับรีเซ็ตโบนัสก่อนกำหนด
 - โชว์ 5 แถว เลื่อนดูที่เหลือได้, 8 ธีม, มืด/สว่าง, ปรับความโปร่งใส, ย่อขยาย, ปักบนเดสก์ท็อปแบบ Rainmeter
 
-ติดตั้ง: ลง .NET 8 SDK และ Python 3 แล้วรัน `dotnet publish -c Release -o publish` คลิกขวาที่วิดเจ็ตเพื่อตั้งค่า
+**ดาวน์โหลด:** [หน้า Release ล่าสุด](https://github.com/Pakapong26/ai-quota-hud/releases/latest) ไม่ต้อง build
+- ไฟล์ `standalone` แตก zip แล้วเปิด `QuotaWidget.exe` ได้เลย (ต้องมี Python 3)
+- ไฟล์ `framework` ขนาดเล็ก ต้องลง .NET 8 Desktop Runtime + Python 3
+- วาง `collector.py` ไว้ข้าง exe คลิกขวาที่วิดเจ็ตเพื่อตั้งค่า
+
+Build เอง: ลง .NET 8 SDK และ Python 3 แล้วรัน `dotnet publish -c Release -o publish`
+
+อยากได้ฟีเจอร์อะไรหรือเจอบั๊ก [เปิด issue](https://github.com/Pakapong26/ai-quota-hud/issues) ได้เลยครับ
 
 ## License
 
