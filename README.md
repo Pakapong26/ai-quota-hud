@@ -10,8 +10,25 @@ A sci-fi desktop widget for Windows that shows how much of your AI coding quota 
 
 **[⬇ Latest release (prebuilt Windows zip)](https://github.com/Pakapong26/ai-quota-hud/releases/latest)**: no build needed.
 
-- `…-standalone.zip`: just unzip and run `QuotaWidget.exe` (needs Python 3 only)
-- `…-framework.zip`: tiny, needs the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) + Python 3
+Pick an edition (same app, you can switch any time from right-click → **Edition**):
+
+| | **Lite** | **Full** |
+|---|---|---|
+| ★ USE on the account with the most quota left | ✓ | ✓ |
+| Sort by last used / soonest reset / most left | ✓ | ✓ |
+| Bonus check folds to one line (click to open, opens itself on an early reset) | ✓ | ✓ |
+| Windows alerts: window reset, 90 % used, bonus reset | | ✓ |
+| Compact rows, one line per account (hover for details) | | ✓ |
+| 7-day usage sparkline + "out in ~X at this pace" | | ✓ |
+
+- `…-lite-standalone.zip` / `…-full-standalone.zip`: just unzip and run `QuotaWidget.exe` (needs Python 3 only)
+- `…-lite-framework.zip` / `…-full-framework.zip`: tiny, need the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) + Python 3
+
+| Lite | Full | Full, compact |
+|---|---|---|
+| ![Lite](docs/edition-lite.png) | ![Full](docs/edition-full.png) | ![Full compact](docs/edition-full-compact.png) |
+
+*(screenshots use demo data)*
 
 Keep `collector.py` next to the exe. Right-click the widget for settings. Windows SmartScreen may warn because the exe is unsigned; build from source below if you prefer.
 
@@ -29,7 +46,9 @@ It never opens `auth.json` or any credential file. The xKiro key stays on the ma
 
 - One row per account: plan, "x% left" for each window, countdown to reset, *CREDITS 0*, *stale*, *RESET ✓ READY*
 - xKiro: dollars left in the 5 h and 7 d windows, free tokens used today, wallet
-- **Bonus / early reset check**: each refresh is compared with the last; if usage drops or the reset time moves earlier before the scheduled reset, it flags *EARLY RESET* with the time (kept 48 h)
+- **★ USE** marks the account with the most quota left; sort by last used, soonest reset or most left
+- Plans that only report a 7-day window get a small `no 5H` tag instead of an empty slot
+- **Bonus / early reset check**: folds to one line (click its header) and opens itself when a new one shows up; each refresh is compared with the last; if usage drops or the reset time moves earlier before the scheduled reset, it flags *EARLY RESET* with the time (kept 48 h)
 - **Same account on LAP and VPS**: rows stay separate (each with its own countdown) but are linked with a `= LAP` / `= VPS` chip; the one with the older log sits underneath, dimmed, with "older log by …"
 - Shows 5 rows; scroll with the mouse wheel for the rest
 - 8 colour themes, dark / light, glass / tinted / solid / floating, panel and whole-widget opacity
@@ -85,7 +104,10 @@ Want a feature or found a bug? Tell me either way, all ideas welcome:
 - **ไม่กินโควต้า** ไม่เรียก AI อ่านแค่ไฟล์บันทึก ไม่เปิดไฟล์ล็อกอิน
 - ดู % ที่เหลือของรอบ 5 ชม. / 7 วัน / 30 วัน พร้อมนับถอยหลังรีเซ็ต
 - xKiro ดูเงินที่เหลือ โควต้าฟรีรายวัน และ wallet
-- ตรวจจับรีเซ็ตโบนัสก่อนกำหนด
+- ตรวจจับรีเซ็ตโบนัสก่อนกำหนด (ส่วนนี้พับเหลือบรรทัดเดียวได้ กางเองเมื่อเจอ)
+- มี 2 รุ่นให้เลือก สลับได้ในเมนูคลิกขวา → Edition
+  - **Lite**: ★ USE บอกบัญชีที่ควรใช้, เรียงตามรีเซ็ตก่อน / เหลือมากสุด, ป้าย no 5H แทนช่องว่าง
+  - **Full**: ทุกอย่างใน Lite + แจ้งเตือน Windows (รีเซ็ตแล้ว / ใช้ถึง 90% / bonus reset), แถวแบบย่อ (ชี้เมาส์ดูรายละเอียด), กราฟใช้งาน 7 วัน และบอกว่าจะหมดในอีกกี่ชั่วโมงถ้าใช้ในอัตรานี้
 - บัญชีเดียวกันที่เห็นทั้งในเครื่องและบน VPS จะมีป้าย `= LAP` / `= VPS` และแถวที่ log เก่ากว่าจะจางลงพร้อมบอกว่าเก่ากว่ากี่นาที
 - โชว์ 5 แถว เลื่อนดูที่เหลือได้, 8 ธีม, มืด/สว่าง, ปรับความโปร่งใส, ย่อขยาย, ปักบนเดสก์ท็อปแบบ Rainmeter
 
