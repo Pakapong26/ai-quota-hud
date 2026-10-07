@@ -22,7 +22,7 @@ def recent(pattern, age):
 
 def codex(d):
     files = recent(os.path.join(d, 'sessions', '**', '*.jsonl'), 400 * 86400)
-    rec = {'home': os.path.basename(d), 'kind': 'codex', 'plan': None, 'at': None, 'win': [], 'tok5h': 0, 'tok24h': 0, 'blocked': None}
+    rec = {'home': os.path.basename(d), 'kind': 'codex', 'plan': None, 'at': None, 'win': [], 'tok5h': 0, 'tok24h': 0, 'blocked': None, 'model': None}
     found = False
     for i, f in enumerate(files[:40]):
         try:
@@ -30,6 +30,12 @@ def codex(d):
         except Exception:
             continue
         for ln in reversed(lines):
+            if rec['model'] is None and '"turn_context"' in ln:   # newest turn's model, from the same log
+                try:
+                    j = json.loads(ln); rec['model'] = (j.get('payload') or {}).get('model')
+                except Exception:
+                    pass
+                continue
             if '"token_count"' not in ln:
                 continue
             try:

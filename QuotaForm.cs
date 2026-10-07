@@ -34,8 +34,18 @@ sealed class QuotaForm : Form
     // Lite = clean list (best-account star, sorting, folding bonus check); Full adds alerts, compact rows and usage history.
     // The zip's edition.txt only picks the first-run default; the menu switches any time.
     bool full, bonusOpen, notify = true, compact, spark = true;
-    int sortMode;                                           // 0 last used · 1 soonest reset · 2 most left
-    static readonly string[] Sorts = { "Last used", "Soonest reset", "Most left" };
+    int sortMode;                                           // 0 last used · 1 soonest reset · 2 most left · 3 most used
+    static readonly string[] Sorts = { "Last used", "Soonest reset", "Most left", "Most used" };
+    // title-bar tabs: ALL, then one per provider found in the logs (OPENAI, ANTHROPIC, and any new kind the collector adds)
+    string tab = "all";
+    readonly List<(string key, RectangleF r)> tabRects = new();
+    static string Prov(Account a) => a.Kind is "codex" or "xkiro" ? "openai" : a.Kind == "claude" ? "anthropic" : a.Kind;
+    static string Family(string model)
+    {
+        var m = (model ?? "").ToLowerInvariant();
+        foreach (var f in new[] { "opus", "sonnet", "haiku" }) if (m.Contains(f)) return f.ToUpperInvariant();
+        return m.Length == 0 ? "UNKNOWN MODEL" : m.Replace("claude-", "").ToUpperInvariant();
+    }
     bool Notify => full && notify; bool Compact => full && compact; bool Spark => full && spark;
 
     Color A1 => Themes[theme].a1;
@@ -83,8 +93,11 @@ sealed class QuotaForm : Form
         best = usable.Count > 1 ? usable.OrderBy(MostUsed).ThenBy(NextReset).First() : null;
         if (sortMode == 1) off = off.OrderBy(NextReset).ToList();
         else if (sortMode == 2) off = off.OrderBy(a => a.Blocked != null).ThenBy(MostUsed).ToList();
+        else if (sortMode == 3) off = off.OrderByDescending(MostUsed).ToList();
         // keep a twin right under the newer row so the pair reads together
         off = off.Where(a => !a.Older).SelectMany(a => off.Where(o => o.Older && o.Twin == a).Prepend(a)).ToList();
+        if (tab != "all" && !acc.Any(a => Prov(a) == tab)) tab = "all";
+        if (tab != "all") { rows = TabRows(acc, off); return; }
         r.Add(new Row("head", null, "OFFICIAL  ·  CODEX / CHATGPT")); r.AddRange(off.Select(a => new Row("quota", a, null)));
         var xk = acc.Where(a => a.Kind == "xkiro").ToList();
         if (xk.Count > 0) { r.Add(new Row("head", null, "xKIRO  ·  PAID + FREE")); r.AddRange(xk.Select(a => new Row("quota", a, null))); }
@@ -93,6 +106,27 @@ sealed class QuotaForm : Form
         var rest = acc.Where(a => a.Kind == "codex" && !Active(a)).ToList();
         if (showInactive && rest.Count > 0) { r.Add(new Row("head", null, "INACTIVE / NO LOGIN")); r.AddRange(rest.Select(a => new Row("quota", a, null))); }
         rows = r;
+    }
+    // one provider's view: OpenAI by plan, then xKiro, then other / no-login homes; Anthropic by model family, most used first
+    List<Row> TabRows(List<Account> acc, List<Account> off)
+    {
+        var r = new List<Row>();
+        void Group(string title, IEnumerable<Account> items, string kind = "quota") { var l = items.ToList(); if (l.Count == 0) return; r.Add(new Row("head", null, title)); r.AddRange(l.Select(a => new Row(kind, a, null))); }
+        if (tab == "openai")
+        {
+            foreach (var plan in off.Select(a => a.Plan ?? "").Distinct().OrderBy(p => p switch { "enterprise" => 0, "business" => 1, "team" => 2, "pro" => 3, "plus" => 4, "free" => 6, _ => 5 }))
+                Group($"OFFICIAL  ·  {(plan.Length == 0 ? "PLAN ?" : plan.ToUpperInvariant())}", off.Where(a => (a.Plan ?? "") == plan));
+            Group("xKIRO  ·  PAID + FREE", acc.Where(a => a.Kind == "xkiro"));
+            Group("OTHER  ·  NO RATE DATA / NO LOGIN", acc.Where(a => a.Kind == "codex" && !Active(a)));
+        }
+        else if (tab == "anthropic")
+        {
+            var cl = acc.Where(a => a.Kind == "claude").OrderByDescending(a => a.Tok24h).ToList();
+            foreach (var fam in cl.Select(a => Family(a.Model)).Distinct())
+                Group($"CLAUDE  ·  {fam}  ·  TOKENS 5h · 24h", cl.Where(a => Family(a.Model) == fam), "claude");
+        }
+        else Group(tab.ToUpperInvariant(), acc.Where(a => Prov(a) == tab));
+        return r;
     }
     float RowHeight(Row r) => r.Kind == "head" ? HeadH : r.Kind == "claude" ? SubH : RowH;
     float ContentH => rows.Sum(RowHeight);
@@ -111,13 +145,15 @@ sealed class QuotaForm : Form
         {
             if (e.Button != MouseButtons.Left) return;
             if (InGrip(e.Location)) { resizing = true; resizeStart = Cursor.Position; resizeSize0 = size; Capture = true; return; }
+            var tp = new PointF(e.X / scale, e.Y / scale);
+            foreach (var (key, rc) in tabRects) if (rc.Contains(tp)) { tab = key; scrollTarget = scrollY = 0; tipFor = null; BuildRows(); SaveSettings(); Render(); return; }
             if (OnBonusHeader(e.Location)) { bonusOpen = !bonusOpen; ApplySize(); SaveSettings(); Render(); return; }
             ReleaseCapture(); SendMessage(Handle, 0xA1, 2, 0); SaveSettings();
         };
         MouseMove += (_, e) =>
         {
             if (resizing) { size = Math.Clamp(resizeSize0 + (Cursor.Position.X - resizeStart.X) / (W * DeviceDpi / 96f), 0.6f, 2.2f); ApplySize(); Render(); return; }
-            Cursor = InGrip(e.Location) ? Cursors.SizeNWSE : OnBonusHeader(e.Location) ? Cursors.Hand : Cursors.Default;
+            Cursor = InGrip(e.Location) ? Cursors.SizeNWSE : OnBonusHeader(e.Location) || tabRects.Any(tr => tr.r.Contains(e.X / scale, e.Y / scale)) ? Cursors.Hand : Cursors.Default;
             HoverTip(e.Location);
         };
         MouseLeave += (_, _) => { tip.Hide(this); tipFor = null; };
@@ -155,7 +191,7 @@ sealed class QuotaForm : Form
         if (hit == tipFor) return;
         tipFor = hit;
         if (hit == null) { tip.Hide(this); return; }
-        var lines = new List<string> { $"{hit.Source} {hit.Name} {hit.Plan?.ToUpperInvariant()}" };
+        var lines = new List<string> { $"{hit.Source} {hit.Name} {hit.Plan?.ToUpperInvariant()}{(hit.Model != null ? "  ·  " + hit.Model : "")}" };
         foreach (var win in hit.Win)
         {
             var (used, wasReset) = Eff(win);
@@ -324,7 +360,7 @@ sealed class QuotaForm : Form
     {
         using var f = new QuotaForm();
         foreach (var kv in opts.Split(';').Select(x => x.Split('=')).Where(x => x.Length == 2))
-            switch (kv[0]) { case "theme": f.theme = int.Parse(kv[1]); break; case "light": f.light = kv[1] == "1"; break; case "bg": f.bg = int.Parse(kv[1]); break; case "alpha": f.panelAlpha = int.Parse(kv[1]); break; case "full": f.full = kv[1] == "1"; break; case "compact": f.compact = kv[1] == "1"; break; case "bonus": f.bonusOpen = kv[1] == "1"; break; case "sort": f.sortMode = int.Parse(kv[1]); break; }
+            switch (kv[0]) { case "theme": f.theme = int.Parse(kv[1]); break; case "light": f.light = kv[1] == "1"; break; case "bg": f.bg = int.Parse(kv[1]); break; case "alpha": f.panelAlpha = int.Parse(kv[1]); break; case "full": f.full = kv[1] == "1"; break; case "compact": f.compact = kv[1] == "1"; break; case "bonus": f.bonusOpen = kv[1] == "1"; break; case "sort": f.sortMode = int.Parse(kv[1]); break; case "tab": f.tab = kv[1]; break; }
         f.snap = Data.Fetch(); f.CheckBonus(); f.RecordUsage(); f.BuildRows(); f.appear = 1; f.ApplySize(); for (int i = 0; i < 200 && f.Step(); i++) { }
         using var bmp = new Bitmap(f.Width, f.Height, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
@@ -372,7 +408,8 @@ sealed class QuotaForm : Form
         }
 
         using var ink = new SolidBrush(Color.FromArgb((int)(255 * Math.Max(0.15f, appear)), Ink)); using var dim = new SolidBrush(Dim); using var acc = new SolidBrush(AccentText(A1)); using var acc2 = new SolidBrush(AccentText(A2));
-        Text(g, "AI QUOTA  //  CODEX · CLAUDE", fTitle, dim, 20, 10, floating);
+        Text(g, "AI QUOTA", fTitle, dim, 20, 10, floating);
+        DrawTabs(g, 20 + g.MeasureString("AI QUOTA", fTitle).Width + 6, 9, floating);
         var clock = DateTime.Now.ToString("HH:mm:ss"); Text(g, clock, fTitle, acc, w - 20 - g.MeasureString(clock, fTitle).Width, 10, floating);
 
         // scrolling list of accounts (5 rows by default; wheel scrolls, Ctrl+wheel resizes)
@@ -425,6 +462,29 @@ sealed class QuotaForm : Form
         var upd = fetching ? "updating…" : snap == null ? "" : $"upd {snap.Time:HH:mm} · next {Span((nextFetch - DateTime.Now).TotalSeconds)} · no quota used";
         Text(g, upd, fSmall, dim, w - 20 - g.MeasureString(upd, fSmall).Width, fy, floating);
         using (var grip = new Pen(Color.FromArgb(110, A1), 1f)) { g.DrawLine(grip, w - 5, h - 12, w - 12, h - 5); g.DrawLine(grip, w - 5, h - 8, w - 8, h - 5); }
+    }
+
+    void DrawTabs(Graphics g, float x, float y, bool sh)
+    {
+        tabRects.Clear();
+        var accs = snap?.Accounts ?? new();
+        var provs = new List<string> { "all" };
+        provs.AddRange(accs.Select(Prov).Distinct().OrderBy(p => p == "openai" ? 0 : p == "anthropic" ? 1 : 2).ThenBy(p => p));
+        if (provs.Count <= 2) return;                       // a single provider needs no tabs
+        foreach (var p in provs)
+        {
+            int n = p == "all" ? 0 : accs.Count(a => Prov(a) == p && (a.Kind != "codex" || Active(a)));
+            var label = p.ToUpperInvariant() + (n > 0 ? $" {n}" : "");
+            bool on = p == tab;
+            var sz = g.MeasureString(label, fSmall); var rc = new RectangleF(x, y, sz.Width + 8, 15);
+            using (var path = Round(rc, 4))
+            {
+                using var fill = new SolidBrush(Color.FromArgb(on ? (light ? 70 : 90) : (light ? 18 : 24), A1)); g.FillPath(fill, path);
+                if (on) { using var pen = new Pen(Color.FromArgb(200, A1), 1f); g.DrawPath(pen, path); }
+            }
+            using var b = new SolidBrush(on ? AccentText(A1) : Dim); Text(g, label, fSmall, b, x + 4, y + 1, false);
+            tabRects.Add((p, rc)); x += rc.Width + 4;
+        }
     }
 
     void SectionHeader(Graphics g, string t, float y, int w, Brush b, bool sh)
@@ -766,7 +826,7 @@ sealed class QuotaForm : Form
             theme = Math.Clamp(I("theme", 0), 0, Themes.Length - 1); bg = Math.Clamp(I("bg", 0), 0, Backgrounds.Length - 1); panelAlpha = Math.Clamp(I("alpha", 215), 0, 255);
             size = Math.Clamp(I("size", 100), 60, 220) / 100f; light = I("light", 0) == 1; effects = I("fx", 1) == 1; showInactive = I("inactive", 0) == 1;
             showClaude = I("claude", 1) == 1; corners = I("corners", 1) == 1; clickThrough = I("through", 0) == 1; refreshMin = Math.Clamp(I("refresh", 5), 1, 60); pinDesktop = I("pin", 0) == 1; visibleRows = Math.Clamp(I("rows", 5), 3, 12);
-            full = I("full", EditionDefault()) == 1; bonusOpen = I("bonus", 0) == 1; notify = I("notify", 1) == 1; compact = I("compact", 0) == 1; spark = I("spark", 1) == 1; sortMode = Math.Clamp(I("sort", 0), 0, Sorts.Length - 1);
+            full = I("full", EditionDefault()) == 1; bonusOpen = I("bonus", 0) == 1; notify = I("notify", 1) == 1; compact = I("compact", 0) == 1; spark = I("spark", 1) == 1; sortMode = Math.Clamp(I("sort", 0), 0, Sorts.Length - 1); tab = kv.TryGetValue("tab", out var tb) ? tb : "all";
         }
         catch { TopMost = true; full = EditionDefault() == 1; }
     }
@@ -786,7 +846,7 @@ sealed class QuotaForm : Form
             File.WriteAllLines(cfgPath, new[] { $"x={Left}", $"y={Top}", $"top={(TopMost ? 1 : 0)}", $"opacity={opacity}", $"theme={theme}", $"bg={bg}", $"alpha={panelAlpha}",
                 $"size={(int)Math.Round(size * 100)}", $"light={(light ? 1 : 0)}", $"fx={(effects ? 1 : 0)}", $"inactive={(showInactive ? 1 : 0)}", $"claude={(showClaude ? 1 : 0)}",
                 $"corners={(corners ? 1 : 0)}", $"through={(clickThrough ? 1 : 0)}", $"refresh={refreshMin}", $"pin={(pinDesktop ? 1 : 0)}", $"rows={visibleRows}",
-                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}" });
+                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}" });
         }
         catch { }
     }

@@ -2,7 +2,9 @@
 
 A sci-fi desktop widget for Windows that shows how much of your AI coding quota is left, for **every Codex / ChatGPT account, xKiro, and Claude Code**, on this PC and on a remote Linux box. Built with **Claude Code (Claude Opus 5.5)**.
 
-![AI Quota HUD](docs/quota-widget-dark.png)
+![AI Quota HUD demo](docs/demo.gif)
+
+*(demo data)*
 
 > ไทย: ดูหัวข้อ [ภาษาไทย](#ภาษาไทย) ด้านล่าง · Looking for CPU/GPU monitoring? See [system-hud-widget](https://github.com/Pakapong26/system-hud-widget).
 
@@ -15,7 +17,8 @@ Pick an edition (same app, you can switch any time from right-click → **Editio
 | | **Lite** | **Full** |
 |---|---|---|
 | ★ USE on the account with the most quota left | ✓ | ✓ |
-| Sort by last used / soonest reset / most left | ✓ | ✓ |
+| Provider tabs ALL / OPENAI / ANTHROPIC, grouped by plan and model | ✓ | ✓ |
+| Sort by last used / soonest reset / most left / most used | ✓ | ✓ |
 | Bonus check folds to one line (click to open, opens itself on an early reset) | ✓ | ✓ |
 | Windows alerts: window reset, 90 % used, bonus reset | | ✓ |
 | Compact rows, one line per account (hover for details) | | ✓ |
@@ -46,7 +49,10 @@ It never opens `auth.json` or any credential file. The xKiro key stays on the ma
 
 - One row per account: plan, "x% left" for each window, countdown to reset, *CREDITS 0*, *stale*, *RESET ✓ READY*
 - xKiro: dollars left in the 5 h and 7 d windows, free tokens used today, wallet
-- **★ USE** marks the account with the most quota left; sort by last used, soonest reset or most left
+- **Provider tabs** in the title bar: **ALL · OPENAI · ANTHROPIC** (plus any new provider the collector finds). OPENAI groups by plan (TEAM / PLUS / FREE…), then xKiro, then other / no-login homes; ANTHROPIC groups Claude by model (OPUS / SONNET / HAIKU), most used first
+
+  ![tabs](docs/tabs.png)
+- **★ USE** marks the account with the most quota left; sort by last used, soonest reset, most left or most used
 - Plans that only report a 7-day window get a small `no 5H` tag instead of an empty slot
 - **Bonus / early reset check**: folds to one line (click its header) and opens itself when a new one shows up; each refresh is compared with the last; if usage drops or the reset time moves earlier before the scheduled reset, it flags *EARLY RESET* with the time (kept 48 h)
 - **Same account on LAP and VPS**: rows stay separate (each with its own countdown) but are linked with a `= LAP` / `= VPS` chip; the one with the older log sits underneath, dimmed, with "older log by …"
@@ -105,8 +111,9 @@ Want a feature or found a bug? Tell me either way, all ideas welcome:
 - ดู % ที่เหลือของรอบ 5 ชม. / 7 วัน / 30 วัน พร้อมนับถอยหลังรีเซ็ต
 - xKiro ดูเงินที่เหลือ โควต้าฟรีรายวัน และ wallet
 - ตรวจจับรีเซ็ตโบนัสก่อนกำหนด (ส่วนนี้พับเหลือบรรทัดเดียวได้ กางเองเมื่อเจอ)
+- แท็บบนหัววิดเจ็ต **ALL / OPENAI / ANTHROPIC** คลิกเลือกได้ OPENAI แบ่งกลุ่มตามแพ็กเกจ (TEAM / PLUS / FREE) + xKiro + อื่นๆ ส่วน ANTHROPIC แบ่งตามโมเดล (OPUS / SONNET / HAIKU) เรียงจากใช้มากไปน้อย ถ้ามีเจ้าใหม่จะขึ้นแท็บเพิ่มเอง
 - มี 2 รุ่นให้เลือก สลับได้ในเมนูคลิกขวา → Edition
-  - **Lite**: ★ USE บอกบัญชีที่ควรใช้, เรียงตามรีเซ็ตก่อน / เหลือมากสุด, ป้าย no 5H แทนช่องว่าง
+  - **Lite**: ★ USE บอกบัญชีที่ควรใช้, เรียงตามรีเซ็ตก่อน / เหลือมากสุด / ใช้มากสุด, ป้าย no 5H แทนช่องว่าง
   - **Full**: ทุกอย่างใน Lite + แจ้งเตือน Windows (รีเซ็ตแล้ว / ใช้ถึง 90% / bonus reset), แถวแบบย่อ (ชี้เมาส์ดูรายละเอียด), กราฟใช้งาน 7 วัน และบอกว่าจะหมดในอีกกี่ชั่วโมงถ้าใช้ในอัตรานี้
 - บัญชีเดียวกันที่เห็นทั้งในเครื่องและบน VPS จะมีป้าย `= LAP` / `= VPS` และแถวที่ log เก่ากว่าจะจางลงพร้อมบอกว่าเก่ากว่ากี่นาที
 - โชว์ 5 แถว เลื่อนดูที่เหลือได้, 8 ธีม, มืด/สว่าง, ปรับความโปร่งใส, ย่อขยาย, ปักบนเดสก์ท็อปแบบ Rainmeter
