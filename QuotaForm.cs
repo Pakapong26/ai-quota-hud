@@ -62,6 +62,14 @@ sealed class QuotaForm : Form
         var acc = snap?.Accounts ?? new();
         var r = new List<Row>();
         var off = acc.Where(a => a.Kind == "codex" && Active(a)).OrderByDescending(a => a.At).ToList();
+        foreach (var a in acc) { a.Twin = null; a.Older = false; }
+        foreach (var grp in off.GroupBy(a => $"{a.Name}|{a.Plan}").Where(gr => gr.Select(a => a.Source).Distinct().Count() > 1))
+        {
+            var newest = grp.First();
+            foreach (var a in grp.Skip(1)) { a.Twin = newest; a.Older = true; newest.Twin ??= a; }
+        }
+        // keep a twin right under the newer row so the pair reads together
+        off = off.Where(a => !a.Older).SelectMany(a => off.Where(o => o == a || (o.Older && o.Twin == a))).ToList();
         r.Add(new Row("head", null, "OFFICIAL  ·  CODEX / CHATGPT")); r.AddRange(off.Select(a => new Row("quota", a, null)));
         var xk = acc.Where(a => a.Kind == "xkiro").ToList();
         if (xk.Count > 0) { r.Add(new Row("head", null, "xKIRO  ·  PAID + FREE")); r.AddRange(xk.Select(a => new Row("quota", a, null))); }
@@ -381,13 +389,16 @@ sealed class QuotaForm : Form
     {
         float x = 20;
         Chip(g, a.Source, x, y, a.Source == "VPS" ? A2 : A1, sh, out var cw); x += cw + 5;
+        if (a.Older) ink = dim;
         Text(g, a.Name, fName, ink, x, y - 1, sh); x += g.MeasureString(a.Name, fName).Width + 2;
-        if (!string.IsNullOrEmpty(a.Plan)) Chip(g, a.Plan.ToUpperInvariant(), x, y, Dim, sh, out _);
+        if (!string.IsNullOrEmpty(a.Plan)) { Chip(g, a.Plan.ToUpperInvariant(), x, y, Dim, sh, out var pw); x += pw + 5; }
+        if (a.Twin != null) Chip(g, "= " + a.Twin.Source, x, y, Dim, sh, out _);
 
         double age = a.At > 0 ? Now - a.At : double.MaxValue;
         string note; Color nc;
         if (a.Kind == "xkiro") { note = a.Err != null ? "offline " + a.Err : $"free {Tok(a.FreeUsed ?? 0)}/{Tok(a.FreeLimit ?? 0)} · wallet ${a.Wallet ?? 0:0.00}"; nc = a.Err != null ? Red : Green; }
         else if (!a.Auth) { note = "NO LOGIN"; nc = Dim; }
+        else if (a.Older) { note = $"older log by {Span(a.Twin.At - a.At)}"; nc = Dim; }
         else if (bonusSeen.ContainsKey(a.Source + a.Home)) { note = "BONUS RESET ✓"; nc = Green; }
         else if (a.Blocked == "workspace_owner_credits_depleted") { note = "CREDITS 0"; nc = Red; }
         else if (a.Win.Any(v => Eff(v).reset) && a.Win.All(v => Eff(v).used < 100)) { note = "RESET ✓ READY"; nc = Green; }
@@ -410,6 +421,7 @@ sealed class QuotaForm : Form
             Text(g, WinLabel(win.mins), fSmall, dim, bx, by - 3, sh);
             float tx = bx + 24, tw = Math.Max(20, bw - 24 - 82);
             var c = Level(used);
+            if (a.Older) c = Color.FromArgb(110, c);
             using (var track = new SolidBrush(Color.FromArgb(light ? 30 : 40, c))) g.FillRectangle(track, tx, by + 2, tw, 6);
             float fw = Math.Max(0.5f, tw * Math.Clamp(v, 0, 100) / 100f);
             using (var lb = new LinearGradientBrush(new RectangleF(tx, by + 2, tw + 1, 6), Blend(c, A2, 0.75f), c, 0f)) g.FillRectangle(lb, tx, by + 2, fw, 6);

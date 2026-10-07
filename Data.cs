@@ -11,6 +11,9 @@ sealed class Account
     public double? FreeUsed, FreeLimit, Wallet;
     public double At, Tok5h, Tok24h, Tok7d; public int Msgs24h; public bool Auth = true;
     public List<WinInfo> Win = new();
+    // the same Codex home name + plan on the laptop and on the VPS is treated as one account seen twice;
+    // rows stay separate (each keeps its own countdown) and the one with the older log line is marked
+    public Account Twin; public bool Older;
     public string Name
     {
         get

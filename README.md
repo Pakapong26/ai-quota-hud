@@ -30,6 +30,7 @@ It never opens `auth.json` or any credential file. The xKiro key stays on the ma
 - One row per account: plan, "x% left" for each window, countdown to reset, *CREDITS 0*, *stale*, *RESET ✓ READY*
 - xKiro: dollars left in the 5 h and 7 d windows, free tokens used today, wallet
 - **Bonus / early reset check**: each refresh is compared with the last; if usage drops or the reset time moves earlier before the scheduled reset, it flags *EARLY RESET* with the time (kept 48 h)
+- **Same account on LAP and VPS**: rows stay separate (each with its own countdown) but are linked with a `= LAP` / `= VPS` chip; the one with the older log sits underneath, dimmed, with "older log by …"
 - Shows 5 rows; scroll with the mouse wheel for the rest
 - 8 colour themes, dark / light, glass / tinted / solid / floating, panel and whole-widget opacity
 - Resize with Ctrl + wheel, by dragging the corner, or from the menu (60 to 220 %)
@@ -85,6 +86,7 @@ Want a feature or found a bug? Tell me either way, all ideas welcome:
 - ดู % ที่เหลือของรอบ 5 ชม. / 7 วัน / 30 วัน พร้อมนับถอยหลังรีเซ็ต
 - xKiro ดูเงินที่เหลือ โควต้าฟรีรายวัน และ wallet
 - ตรวจจับรีเซ็ตโบนัสก่อนกำหนด
+- บัญชีเดียวกันที่เห็นทั้งในเครื่องและบน VPS จะมีป้าย `= LAP` / `= VPS` และแถวที่ log เก่ากว่าจะจางลงพร้อมบอกว่าเก่ากว่ากี่นาที
 - โชว์ 5 แถว เลื่อนดูที่เหลือได้, 8 ธีม, มืด/สว่าง, ปรับความโปร่งใส, ย่อขยาย, ปักบนเดสก์ท็อปแบบ Rainmeter
 
 **ดาวน์โหลด:** [หน้า Release ล่าสุด](https://github.com/Pakapong26/ai-quota-hud/releases/latest) ไม่ต้อง build
