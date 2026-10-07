@@ -23,7 +23,13 @@ sealed class QuotaForm : Form
         ("Royal Violet", Color.FromArgb(192, 132, 252), Color.FromArgb(244, 114, 182)),
     };
     static readonly string[] Backgrounds = { "Glass", "Glass (tinted)", "Solid", "None (floating)" };
-    static readonly Color Amber = Color.FromArgb(251, 191, 36), Red = Color.FromArgb(248, 113, 113), Green = Color.FromArgb(74, 222, 128);
+    // Severity colours do not follow the theme, so "fine / low / critical / ready" read the same in all 8 themes.
+    // Each has a mark tone (bars, dots) and, in light mode, a darker ink tone for small text (contrast >= 4.5:1).
+    Color Blue => light ? Color.FromArgb(47, 123, 218) : Color.FromArgb(98, 166, 255);
+    Color Amber => light ? Color.FromArgb(184, 120, 0) : Color.FromArgb(241, 181, 76);
+    Color Red => light ? Color.FromArgb(229, 96, 92) : Color.FromArgb(255, 140, 135);
+    Color Green => light ? Color.FromArgb(42, 148, 85) : Color.FromArgb(87, 201, 135);
+    static readonly Color OpenAiDot = Color.FromArgb(16, 163, 127), AnthropicDot = Color.FromArgb(217, 119, 87);
 
     // ---- settings ----
     int theme, bg, panelAlpha = 215, refreshMin = 5;
@@ -52,7 +58,15 @@ sealed class QuotaForm : Form
     Color A2 => Themes[theme].a2;
     Color Ink => light ? Color.FromArgb(17, 24, 39) : Color.FromArgb(232, 246, 255);
     Color Dim => light ? Color.FromArgb(90, 104, 122) : Color.FromArgb(125, 150, 172);
-    Color AccentText(Color c) => light ? Blend(c, Color.Black, 0.62f) : c;
+    Color AccentText(Color c)
+    {
+        if (!light) return c;
+        if (c == Blue) return Color.FromArgb(35, 102, 194);
+        if (c == Amber) return Color.FromArgb(143, 90, 0);
+        if (c == Red) return Color.FromArgb(179, 52, 47);
+        if (c == Green) return Color.FromArgb(27, 112, 64);
+        return Blend(c, Color.Black, 0.62f);
+    }
 
     // ---- state ----
     Snapshot snap; bool fetching; DateTime nextFetch = DateTime.MinValue;
@@ -60,12 +74,40 @@ sealed class QuotaForm : Form
     float phase, appear;                                    // shimmer phase, fade-in 0..1
     readonly System.Windows.Forms.Timer tick = new() { Interval = 1000 }, anim = new() { Interval = 33 };
     readonly NotifyIcon tray = new();
-    readonly Font fTitle = new("Bahnschrift SemiCondensed", 8.5f), fName = new("Bahnschrift SemiBold", 8.5f), fSmall = new("Bahnschrift SemiCondensed", 7.5f), fNum = new("Bahnschrift", 9f, FontStyle.Bold), fBig = new("Bahnschrift", 11f, FontStyle.Bold);
+    // Font presets, all Windows system fonts (nothing is bundled). The menu lists only the ones installed on this PC.
+    // bold = names, numbers and titles; text = small labels; num = the % and clock column; k = size factor for wide faces.
+    static readonly (string key, string label, string bold, string text, string num, float k)[] FontSets =
+    {
+        ("segoe", "Segoe UI  (GitHub style)", "Segoe UI Semibold", "Segoe UI", "Segoe UI Semibold", 1f),
+        ("variable", "Segoe UI Variable  (Windows 11)", "Segoe UI Variable Text Semibold", "Segoe UI Variable Small", "Segoe UI Variable Display Semib", 1f),
+        ("bahn", "Bahnschrift  (sci-fi HUD)", "Bahnschrift SemiBold", "Bahnschrift SemiCondensed", "Bahnschrift SemiBold", 1.06f),
+        ("cascadia", "Cascadia Mono  (terminal)", "Cascadia Mono SemiBold", "Cascadia Mono", "Cascadia Mono SemiBold", 0.9f),
+        ("consolas", "Consolas  (code)", "Consolas", "Consolas", "Consolas", 0.95f),
+        ("arial", "Arial  (classic)", "Arial", "Arial", "Arial", 0.97f),
+        ("verdana", "Verdana  (large, easy to read)", "Verdana", "Verdana", "Verdana", 0.85f),
+        ("inter", "Inter  (if installed)", "Inter SemiBold", "Inter", "Inter SemiBold", 0.95f),
+    };
+    string fontKey = "segoe";
+    Font fTitle, fName, fSmall, fNum, fBig;
+    static readonly HashSet<string> Installed = new(new System.Drawing.Text.InstalledFontCollection().Families.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
+    static bool HasSet((string key, string label, string bold, string text, string num, float k) s) => Installed.Contains(s.bold) && Installed.Contains(s.text);
+    void BuildFonts()
+    {
+        var s = FontSets.FirstOrDefault(f => f.key == fontKey && HasSet(f));
+        if (s.key == null) { s = FontSets[0]; fontKey = s.key; }
+        // a face without a separate SemiBold family (Consolas, Arial, Verdana) gets the bold style instead
+        Font Make(string fam, float pt, bool strong) => new(fam, pt * s.k, strong && fam == s.text ? FontStyle.Bold : FontStyle.Regular);
+        foreach (var f in new[] { fTitle, fName, fSmall, fNum, fBig }) f?.Dispose();
+        fTitle = Make(s.bold, 7.5f, true); fName = Make(s.bold, 8f, true); fSmall = Make(s.text, 7f, false); fNum = Make(s.num, 8.5f, true); fBig = Make(s.num, 11f, true);
+    }
     float scale = 1f; bool resizing; Point resizeStart; float resizeSize0;
     readonly string cfgPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuotaWidget", "settings.txt");
 
-    const int W = 430, SubH = 24, HeadH = 20;
-    int RowH => Compact ? 22 : 40;
+    const int BaseW = 430, SubH = 24, HeadH = 20;
+    float Tb => Math.Clamp(0.8f / size, 1f, 1.45f);
+    int W => (int)Math.Round(BaseW / Tb);
+    bool Narrow => W < 380;
+    int RowH => Compact ? 22 : 42;
     sealed record Row(string Kind, Account A, string Title);          // Kind: head | quota | claude
     List<Row> rows = new();
     float scrollY, scrollTarget;
@@ -135,7 +177,7 @@ sealed class QuotaForm : Form
     public QuotaForm()
     {
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
-        LoadSettings(); ApplySize();
+        LoadSettings(); BuildFonts(); ApplySize();
         if (Location == Point.Empty) { var wa = Screen.PrimaryScreen.WorkingArea; Location = new Point(wa.Right - Width - 24, wa.Top + 260); }
         var menu = BuildMenu(); ContextMenuStrip = menu;
         tray.Icon = SystemIcons.Information; tray.Text = "AI Quota Widget"; tray.ContextMenuStrip = BuildMenu(); tray.Visible = true;
@@ -152,7 +194,7 @@ sealed class QuotaForm : Form
         };
         MouseMove += (_, e) =>
         {
-            if (resizing) { size = Math.Clamp(resizeSize0 + (Cursor.Position.X - resizeStart.X) / (W * DeviceDpi / 96f), 0.6f, 2.2f); ApplySize(); Render(); return; }
+            if (resizing) { size = Math.Clamp(resizeSize0 + (Cursor.Position.X - resizeStart.X) / (BaseW * DeviceDpi / 96f), 0.6f, 2.2f); ApplySize(); Render(); return; }
             Cursor = InGrip(e.Location) ? Cursors.SizeNWSE : OnBonusHeader(e.Location) || tabRects.Any(tr => tr.r.Contains(e.X / scale, e.Y / scale)) ? Cursors.Hand : Cursors.Default;
             HoverTip(e.Location);
         };
@@ -182,7 +224,6 @@ sealed class QuotaForm : Form
     void HoverTip(Point p)
     {
         Account hit = null;
-        if (Compact)
         {
             float y = p.Y / scale, ry = 32 - scrollY;
             if (y >= 30 && y <= 30 + ListH)
@@ -192,6 +233,8 @@ sealed class QuotaForm : Form
         tipFor = hit;
         if (hit == null) { tip.Hide(this); return; }
         var lines = new List<string> { $"{hit.Source} {hit.Name} {hit.Plan?.ToUpperInvariant()}{(hit.Model != null ? "  ·  " + hit.Model : "")}" };
+        if (hit.Twin != null) lines.Add($"same account also on {hit.Twin.Source}{(hit.Older ? " (newer there)" : "")}");
+        if (hit.Kind == "codex" && hit.Win.Count > 0 && !hit.Win.Any(v => v.mins == 300) && hit.Plan != "free") lines.Add("no 5-hour window in this plan's logs");
         foreach (var win in hit.Win)
         {
             var (used, wasReset) = Eff(win);
@@ -200,7 +243,7 @@ sealed class QuotaForm : Form
         }
         tip.Show(string.Join("\n", lines), this, p.X + 14, p.Y + 14);
     }
-    void ApplySize() { scale = DeviceDpi / 96f * size; Size = new Size((int)(W * scale), (int)(H * scale)); }
+    void ApplySize() { scale = DeviceDpi / 96f * size * Tb; Size = new Size((int)(W * scale), (int)(H * scale)); }
 
     void Refresh_()
     {
@@ -247,6 +290,8 @@ sealed class QuotaForm : Form
             mSize.DropDownItems.Add(Radio(label, () => Math.Abs(size - f) < 0.01f, () => { size = f; ApplySize(); }));
         var mRef = new ToolStripMenuItem("Refresh every");
         foreach (var n in new[] { 2, 5, 10, 30 }) { int k = n; mRef.DropDownItems.Add(Radio($"{n} min", () => refreshMin == k, () => { refreshMin = k; nextFetch = DateTime.Now.AddMinutes(k); })); }
+        var mFont = new ToolStripMenuItem("Font");
+        foreach (var fs in FontSets.Where(HasSet)) { var k = fs.key; mFont.DropDownItems.Add(Radio(fs.label, () => fontKey == k, () => { fontKey = k; BuildFonts(); tipFor = null; })); }
         var mShow = new ToolStripMenuItem("Show");
         mShow.DropDownItems.Add(Check("Claude token use", () => showClaude, v => { showClaude = v; BuildRows(); }));
         mShow.DropDownItems.Add(Check("Inactive / no-login accounts", () => showInactive, v => { showInactive = v; BuildRows(); }));
@@ -276,8 +321,8 @@ sealed class QuotaForm : Form
         var miNow = new ToolStripMenuItem("Refresh now  (double-click)", null, (_, _) => Refresh_());
 
         m.Opening += (_, _) => RefreshChecks();
-        foreach (var sub in new[] { mTheme, mMode, mBg, mOp, mSize, mRows, mRef, mShow, mSort, mEd }) sub.DropDownOpening += (_, _) => RefreshChecks();
-        m.Items.AddRange(new ToolStripItem[] { miNow, new ToolStripSeparator(), mEd, mSort, new ToolStripSeparator(), mTheme, mMode, mBg, mOp, mSize, mRows, mRef, mShow, new ToolStripSeparator(), miPin, miTop, miThrough, miStart,
+        foreach (var sub in new[] { mTheme, mMode, mBg, mOp, mSize, mRows, mRef, mShow, mSort, mEd, mFont }) sub.DropDownOpening += (_, _) => RefreshChecks();
+        m.Items.AddRange(new ToolStripItem[] { miNow, new ToolStripSeparator(), mEd, mSort, new ToolStripSeparator(), mTheme, mMode, mFont, mBg, mOp, mSize, mRows, mRef, mShow, new ToolStripSeparator(), miPin, miTop, miThrough, miStart,
             new ToolStripSeparator(), new ToolStripMenuItem("Exit", null, (_, _) => Close()) });
         return m;
     }
@@ -318,7 +363,8 @@ sealed class QuotaForm : Form
         return t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours:00}h" : t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes:00}m" : $"{t.Minutes}m {t.Seconds:00}s";
     }
     static string Tok(double n) => n >= 1e9 ? $"{n / 1e9:0.00}B" : n >= 1e6 ? $"{n / 1e6:0.00}M" : n >= 1e3 ? $"{n / 1e3:0.0}k" : $"{n:0}";
-    Color Level(double pct) => pct >= 90 ? Red : pct >= 70 ? Amber : A1;
+    Color Level(double usedPct) => usedPct >= 90 ? Red : usedPct >= 70 ? Amber : Blue;
+    static string LeftMark(double usedPct) => usedPct >= 90 ? "⚠ " : "";
 
     // ease every bar toward its target; true while something is still moving
     bool Step()
@@ -360,7 +406,7 @@ sealed class QuotaForm : Form
     {
         using var f = new QuotaForm();
         foreach (var kv in opts.Split(';').Select(x => x.Split('=')).Where(x => x.Length == 2))
-            switch (kv[0]) { case "theme": f.theme = int.Parse(kv[1]); break; case "light": f.light = kv[1] == "1"; break; case "bg": f.bg = int.Parse(kv[1]); break; case "alpha": f.panelAlpha = int.Parse(kv[1]); break; case "full": f.full = kv[1] == "1"; break; case "compact": f.compact = kv[1] == "1"; break; case "bonus": f.bonusOpen = kv[1] == "1"; break; case "sort": f.sortMode = int.Parse(kv[1]); break; case "tab": f.tab = kv[1]; break; }
+            switch (kv[0]) { case "theme": f.theme = int.Parse(kv[1]); break; case "light": f.light = kv[1] == "1"; break; case "bg": f.bg = int.Parse(kv[1]); break; case "alpha": f.panelAlpha = int.Parse(kv[1]); break; case "full": f.full = kv[1] == "1"; break; case "compact": f.compact = kv[1] == "1"; break; case "bonus": f.bonusOpen = kv[1] == "1"; break; case "sort": f.sortMode = int.Parse(kv[1]); break; case "tab": f.tab = kv[1]; break; case "size": f.size = int.Parse(kv[1]) / 100f; break; case "font": f.fontKey = kv[1]; f.BuildFonts(); break; }
         f.snap = Data.Fetch(); f.CheckBonus(); f.RecordUsage(); f.BuildRows(); f.appear = 1; f.ApplySize(); for (int i = 0; i < 200 && f.Step(); i++) { }
         using var bmp = new Bitmap(f.Width, f.Height, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
@@ -408,9 +454,11 @@ sealed class QuotaForm : Form
         }
 
         using var ink = new SolidBrush(Color.FromArgb((int)(255 * Math.Max(0.15f, appear)), Ink)); using var dim = new SolidBrush(Dim); using var acc = new SolidBrush(AccentText(A1)); using var acc2 = new SolidBrush(AccentText(A2));
-        Text(g, "AI QUOTA", fTitle, dim, 20, 10, floating);
-        DrawTabs(g, 20 + g.MeasureString("AI QUOTA", fTitle).Width + 6, 9, floating);
-        var clock = DateTime.Now.ToString("HH:mm:ss"); Text(g, clock, fTitle, acc, w - 20 - g.MeasureString(clock, fTitle).Width, 10, floating);
+        var clock = DateTime.Now.ToString(Narrow ? "HH:mm" : "HH:mm:ss");
+        float clockX = w - 20 - g.MeasureString(clock, fNum).Width, titleW = g.MeasureString("AI QUOTA", fTitle).Width + 6;
+        bool showTitle = 20 + titleW + TabsWidth(g, Narrow) < clockX - 8, shortTabs = Narrow || 20 + TabsWidth(g, false) >= clockX - 8;
+        if (showTitle && !shortTabs) Text(g, "AI QUOTA", fTitle, dim, 20, 10, floating);
+        DrawTabs(g, showTitle && !shortTabs ? 20 + titleW : 20, 9, floating, shortTabs); Text(g, clock, fNum, acc, w - 20 - g.MeasureString(clock, fNum).Width, 9, floating);
 
         // scrolling list of accounts (5 rows by default; wheel scrolls, Ctrl+wheel resizes)
         var list = new RectangleF(10, 30, w - 20, ListH);
@@ -445,11 +493,11 @@ sealed class QuotaForm : Form
             SectionHeader(g, "▾ BONUS / EARLY RESET CHECK", cy, w, acc, floating); cy += 16;
             CheckLine(g, "OpenAI", BonusText("codex"), BonusHit("codex"), cy, floating); cy += 14;
             CheckLine(g, "xKiro", BonusText("xkiro"), BonusHit("xkiro"), cy, floating); cy += 14;
-            CheckLine(g, "Anthropic", "limit % not in logs · check claude.ai usage page by hand", false, cy, floating, true);
+            CheckLine(g, "Anthropic", Narrow ? "not in logs · check claude.ai" : "limit % not in logs · check claude.ai usage page by hand", false, cy, floating, true);
         }
         else
         {
-            var sum = anyHit ? "▸ " + BonusText(BonusHit("codex") ? "codex" : "xkiro") : "▸ BONUS CHECK  ·  " + BonusText("codex");
+            var sum = anyHit ? "▸ " + BonusText(BonusHit("codex") ? "codex" : "xkiro") : (Narrow ? "▸ BONUS  ·  " : "▸ BONUS CHECK  ·  ") + BonusText("codex");
             using var sb = new SolidBrush(AccentText(anyHit ? Green : A1)); Text(g, sum, fSmall, sb, 20, cy, floating);
         }
 
@@ -457,32 +505,47 @@ sealed class QuotaForm : Form
         float fy = h - 20;
         float pulse = fetching ? 0.5f + 0.5f * (float)Math.Sin(phase * Math.PI * 16) : 1f;
         using (var dot = new SolidBrush(Color.FromArgb((int)(255 * pulse), fetching ? Amber : (snap?.VpsOk ?? false) ? Green : Red))) g.FillEllipse(dot, 20, fy + 3, 6, 6);
-        string lap = snap == null ? "…" : snap.LapOk ? "✓" : "✗", vps = snap == null ? "…" : snap.VpsOk ? "✓" : "✗ " + snap.VpsErr;
-        Text(g, $"LAP {lap}   VPS {vps}", fSmall, dim, 30, fy, floating);
-        var upd = fetching ? "updating…" : snap == null ? "" : $"upd {snap.Time:HH:mm} · next {Span((nextFetch - DateTime.Now).TotalSeconds)} · no quota used";
-        Text(g, upd, fSmall, dim, w - 20 - g.MeasureString(upd, fSmall).Width, fy, floating);
+        string lap = snap == null ? "…" : snap.LapOk ? "✓" : "✗", vps = snap == null ? "…" : snap.VpsOk ? "✓" : Narrow ? "✗" : "✗ " + snap.VpsErr;
+        var srcTxt = $"LAP {lap}   VPS {vps}"; float srcEnd = 30 + g.MeasureString(srcTxt, fSmall).Width + 8;
+        Text(g, srcTxt, fSmall, dim, 30, fy, floating);
+        double dataAge = snap == null ? 0 : (DateTime.Now - snap.Time).TotalSeconds, slot = refreshMin * 60 + 60;
+        string fresh = dataAge > 3 * slot ? "⚠ " : dataAge > slot ? "⏱ " : "";
+        var upd = fetching ? "updating…" : snap == null ? "" : Narrow ? $"{fresh}upd {snap.Time:HH:mm} · next {Span((nextFetch - DateTime.Now).TotalSeconds)}" : $"{fresh}upd {snap.Time:HH:mm} · next {Span((nextFetch - DateTime.Now).TotalSeconds)} · no quota used";
+        if (w - 20 - g.MeasureString(upd, fSmall).Width < srcEnd) upd = upd.Replace(" · no quota used", "");
+        using (var ub = new SolidBrush(fresh == "" ? Dim : AccentText(fresh == "⚠ " ? Red : Amber))) Text(g, upd, fSmall, ub, w - 20 - g.MeasureString(upd, fSmall).Width, fy, floating);
         using (var grip = new Pen(Color.FromArgb(110, A1), 1f)) { g.DrawLine(grip, w - 5, h - 12, w - 12, h - 5); g.DrawLine(grip, w - 5, h - 8, w - 8, h - 5); }
     }
 
-    void DrawTabs(Graphics g, float x, float y, bool sh)
+    List<string> Providers()
+    {
+        var provs = new List<string> { "all" };
+        provs.AddRange((snap?.Accounts ?? new()).Select(Prov).Distinct().OrderBy(p => p == "openai" ? 0 : p == "anthropic" ? 1 : 2).ThenBy(p => p));
+        return provs.Count <= 2 ? new() : provs;            // a single provider needs no tabs
+    }
+    string TabLabel(string p, bool shortName)
+    {
+        int n = p == "all" ? 0 : (snap?.Accounts ?? new()).Count(a => Prov(a) == p && (a.Kind != "codex" || Active(a)));
+        var name = shortName ? (p == "openai" ? "GPT" : p == "anthropic" ? "CLAUDE" : p.ToUpperInvariant()) : p.ToUpperInvariant();
+        return name + (n > 0 ? $" {n}" : "");
+    }
+    float TabsWidth(Graphics g, bool shortName) => Providers().Sum(p => g.MeasureString(TabLabel(p, shortName), fSmall).Width + 8 + (p != "all" ? 7 : 0) + 4);
+
+    void DrawTabs(Graphics g, float x, float y, bool sh, bool shortName)
     {
         tabRects.Clear();
-        var accs = snap?.Accounts ?? new();
-        var provs = new List<string> { "all" };
-        provs.AddRange(accs.Select(Prov).Distinct().OrderBy(p => p == "openai" ? 0 : p == "anthropic" ? 1 : 2).ThenBy(p => p));
-        if (provs.Count <= 2) return;                       // a single provider needs no tabs
-        foreach (var p in provs)
+        foreach (var p in Providers())
         {
-            int n = p == "all" ? 0 : accs.Count(a => Prov(a) == p && (a.Kind != "codex" || Active(a)));
-            var label = p.ToUpperInvariant() + (n > 0 ? $" {n}" : "");
+            var label = TabLabel(p, shortName);
             bool on = p == tab;
-            var sz = g.MeasureString(label, fSmall); var rc = new RectangleF(x, y, sz.Width + 8, 15);
+            var sz = g.MeasureString(label, fSmall); var rc = new RectangleF(x, y, sz.Width + 8 + (p != "all" ? 7 : 0), 15);
             using (var path = Round(rc, 4))
             {
                 using var fill = new SolidBrush(Color.FromArgb(on ? (light ? 70 : 90) : (light ? 18 : 24), A1)); g.FillPath(fill, path);
                 if (on) { using var pen = new Pen(Color.FromArgb(200, A1), 1f); g.DrawPath(pen, path); }
             }
-            using var b = new SolidBrush(on ? AccentText(A1) : Dim); Text(g, label, fSmall, b, x + 4, y + 1, false);
+            float tx0 = x + 4;
+            if (p != "all") { using var pd = new SolidBrush(p == "openai" ? OpenAiDot : p == "anthropic" ? AnthropicDot : A2); g.FillEllipse(pd, tx0, y + 5, 5, 5); tx0 += 7; }
+            using var b = new SolidBrush(on ? AccentText(A1) : Dim); Text(g, label, fSmall, b, tx0, y + 1, false);
             tabRects.Add((p, rc)); x += rc.Width + 4;
         }
     }
@@ -493,6 +556,13 @@ sealed class QuotaForm : Form
         float x0 = 24 + g.MeasureString(t, fSmall).Width;
         using var ln = new LinearGradientBrush(new RectangleF(x0, y + 7, w - 20 - x0 + 1, 1), Color.FromArgb(120, A1), Color.FromArgb(0, A1), 0f);
         g.FillRectangle(ln, x0, y + 7, w - 20 - x0, 1);
+    }
+
+    float SourceTag(Graphics g, string src, float x, float y, bool sh)
+    {
+        using (var d = new SolidBrush(src == "VPS" ? A2 : A1)) g.FillEllipse(d, x, y + 4, 5, 5);
+        using var b = new SolidBrush(Dim); Text(g, src, fSmall, b, x + 7, y, sh);
+        return 7 + g.MeasureString(src, fSmall).Width + 2;
     }
 
     void Chip(Graphics g, string t, float x, float y, Color c, bool sh, out float width)
@@ -514,68 +584,78 @@ sealed class QuotaForm : Form
 
     void CodexRow(Graphics g, Account a, float y, int w, Brush ink, Brush dim, bool sh)
     {
-        float x = 20;
-        Chip(g, a.Source, x, y, a.Source == "VPS" ? A2 : A1, sh, out var cw); x += cw + 5;
+        float x = 20 + SourceTag(g, a.Source, 20, y, sh);
         if (a.Older) ink = dim;
         Text(g, a.Name, fName, ink, x, y - 1, sh); x += g.MeasureString(a.Name, fName).Width + 2;
-        if (!string.IsNullOrEmpty(a.Plan)) { Chip(g, a.Plan.ToUpperInvariant(), x, y, Dim, sh, out var pw); x += pw + 5; }
-        if (a.Twin != null) { Chip(g, "= " + a.Twin.Source, x, y, Dim, sh, out var tw0); x += tw0 + 5; }
-        if (a == best) { Chip(g, "★ USE", x, y, Green, sh, out var uw); x += uw + 5; }
-        // plans that only report a long window get a small tag instead of an empty "5H" slot
-        bool no5h = a.Kind == "codex" && a.Win.Count > 0 && !a.Win.Any(v => v.mins == 300) && a.Plan != "free";
-        if (no5h) { Chip(g, "no 5H", x, y, Dim, sh, out var nw); x += nw + 5; }
-        float chipsEnd = x;
 
         double age = a.At > 0 ? Now - a.At : double.MaxValue;
         string note; Color nc;
-        if (a.Kind == "xkiro") { note = a.Err != null ? "offline " + a.Err : $"free {Tok(a.FreeUsed ?? 0)}/{Tok(a.FreeLimit ?? 0)} · wallet ${a.Wallet ?? 0:0.00}"; nc = a.Err != null ? Red : Green; }
-        else if (!a.Auth) { note = "NO LOGIN"; nc = Dim; }
-        else if (a.Older) { note = $"older log by {Span(a.Twin.At - a.At)}"; nc = Dim; }
-        else if (bonusSeen.ContainsKey(a.Source + a.Home)) { note = "BONUS RESET ✓"; nc = Green; }
-        else if (a.Blocked == "workspace_owner_credits_depleted") { note = "CREDITS 0"; nc = Red; }
-        else if (a.Win.Any(v => Eff(v).reset) && a.Win.All(v => Eff(v).used < 100)) { note = "RESET ✓ READY"; nc = Green; }
-        else if (age > 86400) { note = $"stale {Span(age).Split(' ')[0]}"; nc = Dim; }
-        else if (Spark && a.Win.Select(v => Projection(a, v)).FirstOrDefault(s => s != null) is string pj) { note = pj; nc = Amber; }
-        else { note = a.Tok24h > 0 ? $"24h {Tok(a.Tok24h)} tok" : "live"; nc = A1; }
-        float noteW = g.MeasureString(note, fSmall).Width;
+        if (a.Kind == "xkiro") { note = a.Err != null ? "⚠ offline " + a.Err : $"free {Tok(a.FreeUsed ?? 0)}/{Tok(a.FreeLimit ?? 0)} · wallet ${a.Wallet ?? 0:0.00}"; nc = a.Err != null ? Red : Dim; }
+        else if (!a.Auth) { note = "no login"; nc = Dim; }
+        else if (a.Older) { note = Narrow ? $"older {Span(a.Twin.At - a.At)}" : $"same as {a.Twin.Source} · older by {Span(a.Twin.At - a.At)}"; nc = Dim; }
+        else if (bonusSeen.ContainsKey(a.Source + a.Home)) { note = "✓ BONUS RESET"; nc = Green; }
+        else if (a.Blocked == "workspace_owner_credits_depleted") { note = "✕ CREDITS 0"; nc = Red; }
+        else if (a.Win.Any(v => Eff(v).reset) && a.Win.All(v => Eff(v).used < 100)) { note = "✓ READY"; nc = Green; }
+        else if (age > 86400) { note = $"⏱ stale {Span(age).Split(' ')[0]}"; nc = Amber; }
+        else if (Spark && a.Win.Select(v => Projection(a, v)).FirstOrDefault(s => s != null) is string pj) { note = "⚠ " + (Narrow ? pj.Replace(" at this pace", "") : pj); nc = Amber; }
+        else { note = a.Tok24h > 0 ? $"24h {Tok(a.Tok24h)} tok" : "live"; nc = Dim; }
+        float noteW = g.MeasureString(note, fSmall).Width, room = w - 20 - noteW - 6;
         using (var nb = new SolidBrush(AccentText(nc))) Text(g, note, fSmall, nb, w - 20 - noteW, y, sh);
+        if (!string.IsNullOrEmpty(a.Plan)) { var pl = a.Plan.ToUpperInvariant(); float pw = g.MeasureString(pl, fSmall).Width; if (x + pw < room) { Text(g, pl, fSmall, dim, x, y, sh); x += pw + 4; } }
+        if (a == best) { var star = x + 46 < room ? "★ USE" : "★"; Chip(g, star, x, y, Green, sh, out var uw); x += uw + 5; }
+        float chipsEnd = x;
         if (Spark && a.Kind == "codex" && !a.Older) { float sw = 46, sx = w - 26 - noteW - sw; if (sx > chipsEnd + 4) Sparkline(g, a, sx, y + 1, sw, 11); }
 
+        // every row uses the same two columns (short window | long window), so bars and numbers line up down the list;
+        // a window the plan does not report shows a quiet "—"
         var wins = a.Win.Select((v, i) => (v, i)).ToList();
-        int slots = wins.Count, s0 = 0;
-        float by = y + 18, gap = 10, span = w - 40, bw = slots == 0 ? span : (span - gap * (slots - 1)) / slots;
-        if (slots == 0) { Text(g, "no rate-limit data in logs", fSmall, dim, 20, by - 3, sh); return; }
-        foreach (var (win, i) in wins)
+        if (wins.Count == 0) { Text(g, "no rate-limit data in logs", fSmall, dim, 20, y + 16, sh); return; }
+        var cols = new (WinInfo win, int i)?[2];
+        bool twoCols = wins.Count <= 2 && wins.Count(q => q.v.mins <= 300) <= 1 && wins.Count(q => q.v.mins > 300) <= 1;
+        if (twoCols) foreach (var wq in wins) cols[wq.v.mins <= 300 ? 0 : 1] = wq;
+        int slots = twoCols ? 2 : wins.Count;
+        float by = y + 19, gap = 16, span = w - 40, bw = (span - gap * (slots - 1)) / slots;
+        float numW = g.MeasureString("100%", fNum).Width + 2;
+        for (int s = 0; s < slots; s++)
         {
+            float bx = 20 + s * (bw + gap);
+            if (twoCols && cols[s] == null)
+            {
+                Text(g, s == 0 ? "5H" : "7D", fSmall, dim, bx, by - 2, sh);
+                using var q = new SolidBrush(Color.FromArgb(light ? 18 : 22, Dim)); g.FillRectangle(q, bx + 27, by + 3, Math.Max(20, bw - 27 - numW - 4), 5);
+                Text(g, "—", fNum, dim, bx + bw - g.MeasureString("—", fNum).Width, by - 3, sh);
+                continue;
+            }
+            var (win, i) = twoCols ? cols[s].Value : wins[s];
             var (used, wasReset) = Eff(win);
-            float bx = 20 + (i + s0) * (bw + gap), v = Val($"{a.Source}{a.Home}{i}");
-            Text(g, WinLabel(win.mins), fSmall, dim, bx, by - 3, sh);
-            float tx = bx + 24, tw = Math.Max(20, bw - 24 - 82);
-            var c = Level(used);
-            if (a.Older) c = Color.FromArgb(110, c);
-            using (var track = new SolidBrush(Color.FromArgb(light ? 30 : 40, c))) g.FillRectangle(track, tx, by + 2, tw, 6);
-            float fw = Math.Max(0.5f, tw * Math.Clamp(v, 0, 100) / 100f);
-            using (var lb = new LinearGradientBrush(new RectangleF(tx, by + 2, tw + 1, 6), Blend(c, A2, 0.75f), c, 0f)) g.FillRectangle(lb, tx, by + 2, fw, 6);
-            if (effects && fw > 6)
+            float v = Val($"{a.Source}{a.Home}{i}"), leftPct = Math.Clamp(100 - v, 0, 100);
+            Text(g, WinLabel(win.mins), fSmall, dim, bx, by - 2, sh);
+            float tx = bx + 27, tw = Math.Max(20, bw - 27 - numW - 4);
+            var c = wasReset ? Green : a.Blocked != null ? Red : Level(used);
+            int alpha = a.Older ? 110 : 255;
+            // the bar shows what is LEFT, so a short bar and a red colour both mean "running out"
+            using (var track = new SolidBrush(Color.FromArgb(light ? 28 : 36, c))) g.FillRectangle(track, tx, by + 3, tw, 5);
+            float fw = Math.Max(0.5f, tw * leftPct / 100f);
+            using (var lb = new SolidBrush(Color.FromArgb(alpha, c))) g.FillRectangle(lb, tx, by + 3, fw, 5);
+            if (effects && fw > 6 && !a.Older)
             {
                 float sx = tx + (fw + 30) * ((phase * 2 + i * 0.37f) % 1f) - 30;
-                using var shine = new LinearGradientBrush(new RectangleF(sx, by, 30, 10), Color.Transparent, Color.Transparent, 0f) { InterpolationColors = new ColorBlend { Colors = new[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb(light ? 90 : 120, 255, 255, 255), Color.FromArgb(0, 255, 255, 255) }, Positions = new[] { 0f, 0.5f, 1f } } };
-                var st = g.Save(); g.SetClip(new RectangleF(tx, by + 2, fw, 6), CombineMode.Intersect); g.FillRectangle(shine, sx, by + 2, 30, 6); g.Restore(st);
-                if (used >= 95) { using var glow = new Pen(Color.FromArgb((int)(60 + 60 * Math.Sin(phase * Math.PI * 8)), c), 3f); g.DrawRectangle(glow, tx - 1, by + 1, fw + 2, 8); }
+                using var shine = new LinearGradientBrush(new RectangleF(sx, by, 30, 10), Color.Transparent, Color.Transparent, 0f) { InterpolationColors = new ColorBlend { Colors = new[] { Color.FromArgb(0, 255, 255, 255), Color.FromArgb(light ? 50 : 60, 255, 255, 255), Color.FromArgb(0, 255, 255, 255) }, Positions = new[] { 0f, 0.5f, 1f } } };
+                var st = g.Save(); g.SetClip(new RectangleF(tx, by + 3, fw, 5), CombineMode.Intersect); g.FillRectangle(shine, sx, by + 3, 30, 5); g.Restore(st);
             }
-            // what is left (money for xKiro) on the line, reset countdown under it
-            var left = win.cap > 0 ? $"${win.cap - win.spent:0.0} left" : $"{Math.Max(0, 100 - v):0}% left";
-            using (var pb = new SolidBrush(AccentText(c))) Text(g, left, fName, pb, tx + tw + 3, by - 4, sh);
-            var rs = wasReset ? "reset ✓" : win.reset > 0 ? "↻ " + Span(win.reset - Now) : "";
-            Text(g, rs, fSmall, dim, tx + tw + 3, by + 8, sh);
+            if (effects && used >= 95 && !wasReset) { using var glow = new Pen(Color.FromArgb((int)(50 + 50 * Math.Sin(phase * Math.PI * 8)), c), 2f); g.DrawRectangle(glow, tx - 1, by + 2, tw + 2, 7); }
+            // hero number right-aligned in its own column; countdown sits under the bar
+            var num = win.cap > 0 ? $"${win.cap - win.spent:0.0}" : wasReset ? "100%" : $"{LeftMark(used)}{leftPct:0}%";
+            using (var pb = new SolidBrush(Color.FromArgb(alpha, AccentText(c)))) Text(g, num, fNum, pb, bx + bw - g.MeasureString(num, fNum).Width, by - 2, sh);
+            var rs = wasReset ? "✓ reset" : win.reset > 0 ? "↻ " + (Narrow && slots > 1 ? Span(win.reset - Now).Split(' ')[0] : Span(win.reset - Now)) : "";
+            Text(g, rs, fSmall, dim, tx, by + 9, sh);
         }
     }
 
     // one line per account: tightest window only (bar, % left, countdown); hover for the rest
     void CompactRow(Graphics g, Account a, float y, int w, Brush ink, Brush dim, bool sh)
     {
-        float x = 20;
-        Chip(g, a.Source, x, y, a.Source == "VPS" ? A2 : A1, sh, out var cw); x += cw + 5;
+        float x = 20 + SourceTag(g, a.Source, 20, y, sh);
         if (a.Older) ink = dim;
         var name = a.Name.Length > 12 ? a.Name[..11] + "…" : a.Name;
         Text(g, name, fName, ink, x, y - 1, sh); x += g.MeasureString(name, fName).Width + 2;
@@ -587,26 +667,25 @@ sealed class QuotaForm : Form
         }
         int i = Enumerable.Range(0, a.Win.Count).OrderByDescending(k => Eff(a.Win[k]).used).First();
         var win = a.Win[i]; var (used, wasReset) = Eff(win);
-        float v = Val($"{a.Source}{a.Home}{i}"), tx = 170, tw = 90;
-        var c = a.Blocked != null ? Red : Level(used); if (a.Older) c = Color.FromArgb(110, c);
+        float v = Val($"{a.Source}{a.Home}{i}"), tx = w * 0.40f, tw = w * 0.21f;
+        var c = wasReset ? Green : a.Blocked != null ? Red : Level(used); int alpha = a.Older ? 110 : 255;
         Text(g, WinLabel(win.mins), fSmall, dim, tx - 24, y, sh);
-        using (var track = new SolidBrush(Color.FromArgb(light ? 30 : 40, c))) g.FillRectangle(track, tx, y + 5, tw, 5);
-        using (var lb = new SolidBrush(c)) g.FillRectangle(lb, tx, y + 5, Math.Max(0.5f, tw * Math.Clamp(v, 0, 100) / 100f), 5);
-        var left = a.Blocked != null ? "CREDITS 0" : win.cap > 0 ? $"${win.cap - win.spent:0.0}" : $"{Math.Max(0, 100 - v):0}%";
-        using (var pb = new SolidBrush(AccentText(c))) Text(g, left, fName, pb, tx + tw + 6, y - 1, sh);
-        var rs = wasReset ? "reset ✓" : win.reset > 0 ? "↻ " + Span(win.reset - Now) : "";
-        if (Spark && Projection(a, win) != null) rs = "⚠ " + rs;
+        using (var track = new SolidBrush(Color.FromArgb(light ? 28 : 36, c))) g.FillRectangle(track, tx, y + 5, tw, 5);
+        using (var lb = new SolidBrush(Color.FromArgb(alpha, c))) g.FillRectangle(lb, tx, y + 5, Math.Max(0.5f, tw * Math.Clamp(100 - v, 0, 100) / 100f), 5);
+        var left = a.Blocked != null ? "✕ NO CREDIT" : win.cap > 0 ? $"${win.cap - win.spent:0.0}" : wasReset ? "✓ 100%" : $"{LeftMark(used)}{Math.Max(0, 100 - v):0}%";
+        using (var pb = new SolidBrush(Color.FromArgb(alpha, AccentText(c)))) Text(g, left, fName, pb, tx + tw + 6, y - 1, sh);
+        var rs = a.Blocked != null ? "" : wasReset ? "reset ✓" : win.reset > 0 ? "↻ " + (Narrow ? Span(win.reset - Now).Split(' ')[0] : Span(win.reset - Now)) : "";
+        if (Spark && rs != "" && Projection(a, win) != null) rs = "⚠ " + rs;
         Text(g, rs, fSmall, dim, w - 20 - g.MeasureString(rs, fSmall).Width, y, sh);
     }
 
     void ClaudeRow(Graphics g, Account c, float y, int w, Brush ink, Brush dim, bool sh)
     {
-        float x = 20;
-        Chip(g, c.Source, x, y, c.Source == "VPS" ? A2 : A1, sh, out var cw); x += cw + 5;
+        float x = 20 + SourceTag(g, c.Source, 20, y, sh);
         Text(g, c.Name, fName, ink, x, y - 1, sh); x += g.MeasureString(c.Name, fName).Width + 4;
         var model = (c.Model ?? "").Replace("claude-", "");
-        if (model.Length > 0) Text(g, model, fSmall, dim, x, y, sh);
-        float tx = 230, tw = 70, v = Val($"{c.Source}{c.Home}c");
+        if (model.Length > 0 && x + g.MeasureString(model, fSmall).Width < w * 0.52f - 4) Text(g, model, fSmall, dim, x, y, sh);
+        float tx = w * 0.52f, tw = w * 0.15f, v = Val($"{c.Source}{c.Home}c");
         using (var track = new SolidBrush(Color.FromArgb(light ? 30 : 40, A2))) g.FillRectangle(track, tx, y + 5, tw, 5);
         using (var lb = new LinearGradientBrush(new RectangleF(tx, y + 5, tw + 1, 5), A2, A1, 0f)) g.FillRectangle(lb, tx, y + 5, Math.Max(0.5f, tw * v / 100f), 5);
         var t = $"{Tok(c.Tok5h)} · {Tok(c.Tok24h)}";
@@ -826,7 +905,7 @@ sealed class QuotaForm : Form
             theme = Math.Clamp(I("theme", 0), 0, Themes.Length - 1); bg = Math.Clamp(I("bg", 0), 0, Backgrounds.Length - 1); panelAlpha = Math.Clamp(I("alpha", 215), 0, 255);
             size = Math.Clamp(I("size", 100), 60, 220) / 100f; light = I("light", 0) == 1; effects = I("fx", 1) == 1; showInactive = I("inactive", 0) == 1;
             showClaude = I("claude", 1) == 1; corners = I("corners", 1) == 1; clickThrough = I("through", 0) == 1; refreshMin = Math.Clamp(I("refresh", 5), 1, 60); pinDesktop = I("pin", 0) == 1; visibleRows = Math.Clamp(I("rows", 5), 3, 12);
-            full = I("full", EditionDefault()) == 1; bonusOpen = I("bonus", 0) == 1; notify = I("notify", 1) == 1; compact = I("compact", 0) == 1; spark = I("spark", 1) == 1; sortMode = Math.Clamp(I("sort", 0), 0, Sorts.Length - 1); tab = kv.TryGetValue("tab", out var tb) ? tb : "all";
+            full = I("full", EditionDefault()) == 1; bonusOpen = I("bonus", 0) == 1; notify = I("notify", 1) == 1; compact = I("compact", 0) == 1; spark = I("spark", 1) == 1; sortMode = Math.Clamp(I("sort", 0), 0, Sorts.Length - 1); tab = kv.TryGetValue("tab", out var tb) ? tb : "all"; fontKey = kv.TryGetValue("font", out var fk) ? fk : "segoe";
         }
         catch { TopMost = true; full = EditionDefault() == 1; }
     }
@@ -846,7 +925,7 @@ sealed class QuotaForm : Form
             File.WriteAllLines(cfgPath, new[] { $"x={Left}", $"y={Top}", $"top={(TopMost ? 1 : 0)}", $"opacity={opacity}", $"theme={theme}", $"bg={bg}", $"alpha={panelAlpha}",
                 $"size={(int)Math.Round(size * 100)}", $"light={(light ? 1 : 0)}", $"fx={(effects ? 1 : 0)}", $"inactive={(showInactive ? 1 : 0)}", $"claude={(showClaude ? 1 : 0)}",
                 $"corners={(corners ? 1 : 0)}", $"through={(clickThrough ? 1 : 0)}", $"refresh={refreshMin}", $"pin={(pinDesktop ? 1 : 0)}", $"rows={visibleRows}",
-                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}" });
+                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}", $"font={fontKey}" });
         }
         catch { }
     }
