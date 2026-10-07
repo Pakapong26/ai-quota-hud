@@ -1,61 +1,49 @@
-# desktop-ai-hud
+# ai-quota-hud
 
-Two small sci-fi desktop widgets for Windows, built with **Claude Code (Claude Opus 5.5)**:
+A sci-fi desktop widget for Windows that shows how much of your AI coding quota is left, for **every Codex / ChatGPT account, xKiro, and Claude Code**, on this PC and on a remote Linux box. Built with **Claude Code (Claude Opus 5.5)**.
 
-| | |
-|---|---|
-| ![System HUD](docs/hud-widget.png) | ![AI Quota](docs/quota-widget-dark.png) |
-| **HUD Widget**: CPU / GPU load and temperature, per-thread load, RAM, CPU package power, 60 s graph | **AI Quota Widget**: Codex / ChatGPT rate-limit windows, xKiro spend, Claude Code token use, for every account on this PC and on a remote Linux box |
+![AI Quota HUD](docs/quota-widget-dark.png)
 
-Both are plain WinForms (.NET 8), drawn with GDI+ on a per-pixel-alpha window. No Electron, no browser, about 70 MB RAM.
+> ไทย: ดูหัวข้อ [ภาษาไทย](#ภาษาไทย) ด้านล่าง · Looking for CPU/GPU monitoring? See [system-hud-widget](https://github.com/Pakapong26/system-hud-widget).
 
-> ไทย: ดูหัวข้อ [ภาษาไทย](#ภาษาไทย) ด้านล่าง
+## It uses zero quota
 
-## Why the quota widget uses no quota
-
-It never calls a model. It only reads the logs that the tools already write:
+It never calls a model. It only reads what the tools already write:
 
 - **Codex CLI**: `~/.codex*/sessions/**/*.jsonl`, the `rate_limits` field of `token_count` events (5-hour / 7-day / 30-day windows, `used_percent`, `resets_at`).
 - **Claude Code**: `~/.claude*/projects/**/*.jsonl`, the `usage` of each message (tokens in the last 5 h, 24 h, 7 d).
 - **xKiro** (optional): `GET https://api.xkiro.com/v1/usage`, a meter read, not a generation, so it costs nothing.
 
-It never opens `auth.json` or any credential file, and the xKiro key stays on the machine that runs the collector; only numbers come back.
+It never opens `auth.json` or any credential file. The xKiro key stays on the machine that runs the collector; only numbers come back.
 
 ## Features
 
-- 8 colour themes, dark / light, glass / tinted / solid / floating backgrounds, panel and whole-widget opacity
-- Resize: Ctrl + mouse wheel, drag the bottom-right corner, or the Size menu (60 to 220 %)
-- **Pin to desktop**: sits on the wallpaper under every window and stays after Win+D, like Rainmeter's "On desktop"; or Always on top; or a click-through overlay (undo from the tray icon)
-- Animations: bars glide to new values, a shimmer runs along them, full bars pulse; can be turned off
-- Quota widget: shows 5 rows, scroll with the mouse wheel for the rest; "x% left" and a reset countdown per window
-- **Bonus / early reset check**: each refresh is compared with the last; if usage drops or the reset time moves earlier before the scheduled reset, the widget flags *EARLY RESET* with the time (kept 48 h)
-- Settings are saved in `%APPDATA%\<widget>\settings.txt`; right-click for every option
+- One row per account: plan, "x% left" for each window, countdown to reset, *CREDITS 0*, *stale*, *RESET ✓ READY*
+- xKiro: dollars left in the 5 h and 7 d windows, free tokens used today, wallet
+- **Bonus / early reset check**: each refresh is compared with the last; if usage drops or the reset time moves earlier before the scheduled reset, it flags *EARLY RESET* with the time (kept 48 h)
+- Shows 5 rows; scroll with the mouse wheel for the rest
+- 8 colour themes, dark / light, glass / tinted / solid / floating, panel and whole-widget opacity
+- Resize with Ctrl + wheel, by dragging the corner, or from the menu (60 to 220 %)
+- **Pin to desktop** like Rainmeter's "On desktop" (stays after Win+D), Always on top, or click-through overlay
+- Light animations (gliding bars, shimmer, pulse when full), can be turned off
+- Plain WinForms (.NET 8) + a small Python collector, about 70 MB RAM
 
-## Build
+![Light theme](docs/quota-widget-light.png)
 
-Needs the .NET 8 SDK on Windows 10/11.
+## Build and run
 
-```
-cd hud-widget
-dotnet publish -c Release -o publish
-publish\HudWidget.exe
-```
+Needs the .NET 8 SDK and Python 3 on Windows 10/11.
 
 ```
-cd quota-widget
 dotnet publish -c Release -o publish
 publish\QuotaWidget.exe
 ```
 
-### HUD temperatures (optional)
+Right-click the widget for every option; double-click to refresh now.
 
-Windows does not expose CPU/GPU temperatures without a driver. Either run [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) with its web server on port 8085, or build `hud-widget/bridge/SensorBridge.cs` next to `LibreHardwareMonitorLib.dll` and run it as admin; it writes `%ProgramData%\HudWidget\sensors.txt` once a second. Without either, the HUD still shows load, RAM and the graph.
+### Accounts on a remote Linux box (optional)
 
-Set `HUD_LABEL` to change the title (it shows the computer name by default).
-
-### Quota widget: a remote Linux box (optional)
-
-To include accounts on a server, create `~/.vps_env` on the Windows PC:
+Create `~/.vps_env` on the Windows PC:
 
 ```
 export VPS_HOST=your.server
@@ -63,31 +51,28 @@ export VPS_USER=you
 export VPS_KEY=~/.ssh/your_key
 ```
 
-The widget runs `collector.py` there over SSH (`python3 -`, key login only, `BatchMode=yes`). Python 3 is needed on both sides. Nothing is written on the server.
+The widget runs `collector.py` there over SSH (`python3 -`, key login only, `BatchMode=yes`). Nothing is written on the server.
 
-For xKiro, put the key in `~/.config/xkiro/key` (or set `XKIRO_KEY_FILE`), and point `XKIRO_CODEX_HOMES` at the Codex homes that route through xKiro if they are not in `~/.config/xkiro/codex/*`.
+For xKiro put the key in `~/.config/xkiro/key` (or set `XKIRO_KEY_FILE`), and set `XKIRO_CODEX_HOMES` to the Codex homes that route through xKiro if they are not in `~/.config/xkiro/codex/*`.
 
 ## Limits
 
-- Codex only writes rate limits when an account is used, so an idle account shows its last reading with a *stale* tag; *RESET ✓ READY* means the scheduled reset time has passed.
-- Some plans only report one window (for example Plus reports 7 days); the missing 5-hour slot shows "— not in logs" instead of a guess.
+- Codex only writes rate limits when an account is used, so an idle account shows its last reading; *RESET ✓ READY* means the scheduled reset time has passed.
+- Some plans report one window only (Plus reports 7 days); the missing 5 h slot reads "— not in logs" instead of a guess.
 - Claude Code logs have no limit percentage, so the Anthropic line of the reset check is a manual reminder.
 
 ## ภาษาไทย
 
-วิดเจ็ตเดสก์ท็อปสไตล์ไซไฟ 2 ตัวสำหรับ Windows ทำด้วย **Claude Code (Claude Opus 5.5)**
+วิดเจ็ตเดสก์ท็อปสำหรับ Windows ดูว่าโควต้า AI เหลือเท่าไร ครบทุกบัญชี Codex/ChatGPT, xKiro และ Claude Code ทั้งในเครื่องและบน VPS ทำด้วย **Claude Code**
 
-- **HUD Widget**: ดูโหลดและอุณหภูมิ CPU/GPU, โหลดรายเธรด, RAM, กำลังไฟ CPU, กราฟ 60 วินาที
-- **AI Quota Widget**: ดูลิมิตของ Codex/ChatGPT (5 ชม. / 7 วัน / 30 วัน) ยอดใช้ xKiro และ token ของ Claude Code ทุกบัญชี ทั้งในเครื่องและบนเซิร์ฟเวอร์
+- **ไม่กินโควต้า** ไม่เรียก AI อ่านแค่ไฟล์บันทึก ไม่เปิดไฟล์ล็อกอิน
+- ดู % ที่เหลือของรอบ 5 ชม. / 7 วัน / 30 วัน พร้อมนับถอยหลังรีเซ็ต
+- xKiro ดูเงินที่เหลือ โควต้าฟรีรายวัน และ wallet
+- ตรวจจับรีเซ็ตโบนัสก่อนกำหนด
+- โชว์ 5 แถว เลื่อนดูที่เหลือได้, 8 ธีม, มืด/สว่าง, ปรับความโปร่งใส, ย่อขยาย, ปักบนเดสก์ท็อปแบบ Rainmeter
 
-**ไม่กินโควต้า** เพราะไม่เรียก AI เลย อ่านแค่ไฟล์บันทึกที่โปรแกรมเขียนไว้อยู่แล้ว และไม่เปิดไฟล์ล็อกอิน
-
-ลูกเล่น: 8 ธีมสี, โหมดมืด/สว่าง, ปรับความโปร่งใส, ย่อขยายด้วย Ctrl+ลูกกลิ้งหรือลากมุม, ปักไว้บนเดสก์ท็อปแบบ Rainmeter, เลื่อนดูรายการทีละ 5 แถว, ตรวจจับการรีเซ็ตโบนัสก่อนกำหนด
-
-วิธีติดตั้ง: ติดตั้ง .NET 8 SDK แล้วรัน `dotnet publish -c Release -o publish` ในโฟลเดอร์ของแต่ละวิดเจ็ต คลิกขวาที่วิดเจ็ตเพื่อตั้งค่าทุกอย่าง
+ติดตั้ง: ลง .NET 8 SDK และ Python 3 แล้วรัน `dotnet publish -c Release -o publish` คลิกขวาที่วิดเจ็ตเพื่อตั้งค่า
 
 ## License
 
-MIT. Use it, change it, share it.
-
-Made with [Claude Code](https://claude.com/claude-code).
+MIT. Made with [Claude Code](https://claude.com/claude-code).
