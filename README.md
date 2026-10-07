@@ -15,8 +15,6 @@ A sci-fi desktop widget for Windows that shows how much of your AI coding quota 
 
 Keep `collector.py` next to the exe. Right-click the widget for settings. Windows SmartScreen may warn because the exe is unsigned; build from source below if you prefer.
 
-Feature request or bug? [Open an issue](https://github.com/Pakapong26/ai-quota-hud/issues), all ideas welcome.
-
 ## It uses zero quota
 
 It never calls a model. It only reads what the tools already write:
@@ -72,6 +70,13 @@ For xKiro put the key in `~/.config/xkiro/key` (or set `XKIRO_KEY_FILE`), and se
 - Some plans report one window only (Plus reports 7 days); the missing 5 h slot reads "— not in logs" instead of a guess.
 - Claude Code logs have no limit percentage, so the Anthropic line of the reset check is a manual reminder.
 
+## Feedback and ideas
+
+Want a feature or found a bug? Tell me either way, all ideas welcome:
+
+- GitHub: [open an issue](https://github.com/Pakapong26/ai-quota-hud/issues)
+- X (Twitter): mention or DM [@Pakapong26](https://x.com/Pakapong26)
+
 ## ภาษาไทย
 
 วิดเจ็ตเดสก์ท็อปสำหรับ Windows ดูว่าโควต้า AI เหลือเท่าไร ครบทุกบัญชี Codex/ChatGPT, xKiro และ Claude Code ทั้งในเครื่องและบน VPS ทำด้วย **Claude Code**
@@ -89,7 +94,7 @@ For xKiro put the key in `~/.config/xkiro/key` (or set `XKIRO_KEY_FILE`), and se
 
 Build เอง: ลง .NET 8 SDK และ Python 3 แล้วรัน `dotnet publish -c Release -o publish`
 
-อยากได้ฟีเจอร์อะไรหรือเจอบั๊ก [เปิด issue](https://github.com/Pakapong26/ai-quota-hud/issues) ได้เลยครับ
+**อยากได้ฟีเจอร์อะไรหรือเจอบั๊ก** บอกได้ทั้ง [เปิด issue บน GitHub](https://github.com/Pakapong26/ai-quota-hud/issues) หรือแท็ก / DM มาที่ X [@Pakapong26](https://x.com/Pakapong26) ยินดีรับทุกไอเดียครับ
 
 ## License
 
