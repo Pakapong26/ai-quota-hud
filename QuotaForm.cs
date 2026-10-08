@@ -9,7 +9,7 @@ using Microsoft.Win32;
 
 namespace QuotaWidget;
 
-sealed class QuotaForm : Form
+sealed partial class QuotaForm : Form
 {
     static readonly (string name, Color a1, Color a2)[] Themes =
     {
@@ -39,7 +39,8 @@ sealed class QuotaForm : Form
     int visibleRows = 5;
     // Lite = clean list (best-account star, sorting, folding bonus check); Full adds alerts, compact rows and usage history.
     // The zip's edition.txt only picks the first-run default; the menu switches any time.
-    bool full, bonusOpen, notify = true, compact, spark = true;
+    bool full, bonusOpen, notify = true, compact, spark = true, alertPace = true;
+    int alertAt = 90;                                       // low-quota alert when a window is this % used (10 % left by default)
     int sortMode;                                           // 0 last used · 1 soonest reset · 2 most left · 3 most used
     static readonly string[] Sorts = { "Last used", "Soonest reset", "Most left", "Most used" };
     // title-bar tabs: ALL, then one per provider found in the logs (OPENAI, ANTHROPIC, and any new kind the collector adds)
@@ -188,6 +189,7 @@ sealed class QuotaForm : Form
         var menu = BuildMenu(); ContextMenuStrip = menu;
         tray.Icon = SystemIcons.Information; tray.Text = "AI Quota Widget"; tray.ContextMenuStrip = BuildMenu(); tray.Visible = true;
         tray.DoubleClick += (_, _) => { SetClickThrough(false); Activate(); };
+        tray.BalloonTipClicked += (_, _) => { if (full) ShowHistory(); };
 
         MouseDown += (_, e) =>
         {
@@ -196,7 +198,9 @@ sealed class QuotaForm : Form
             var tp = new PointF(e.X / scale, e.Y / scale);
             foreach (var (key, rc) in tabRects) if (rc.Contains(tp)) { tab = key; scrollTarget = scrollY = 0; tipFor = null; BuildRows(); SaveSettings(); Render(); return; }
             if (OnBonusHeader(e.Location)) { bonusOpen = !bonusOpen; ApplySize(); SaveSettings(); Render(); return; }
-            ReleaseCapture(); SendMessage(Handle, 0xA1, 2, 0); SaveSettings();
+            var before = Location;
+            ReleaseCapture(); SendMessage(Handle, 0xA1, 2, 0); SaveSettings();   // returns when the button is released
+            if (full && Location == before && RowAt(e.Location) is Account clicked) ShowHistory(clicked);   // a click, not a drag
         };
         MouseMove += (_, e) =>
         {
@@ -221,7 +225,7 @@ sealed class QuotaForm : Form
         tick.Tick += (_, _) => { ApplyGroup(); FollowHud(); if (Location != savedLoc) SaveSettings(); if (DateTime.Now >= nextFetch && !fetching) Refresh_(); if (DateTime.Now.Second % 30 == 0) CheckAlerts(); if (!anim.Enabled) Render(); };
         anim.Tick += (_, _) => { phase = (phase + 0.012f) % 1f; appear = Math.Min(1f, appear + 0.06f); bool moving = Step(); if (!effects && !moving && appear >= 1) anim.Stop(); Render(); };
         Shown += (_, _) => { ApplyGroup(); SetClickThrough(clickThrough); ApplyPin(); Render(); tick.Start(); anim.Start(); Refresh_(); };
-        FormClosed += (_, _) => { SaveSettings(); tip.Dispose(); tray.Visible = false; tray.Dispose(); tick.Dispose(); anim.Dispose(); };
+        FormClosed += (_, _) => { histForm?.Close(); SaveSettings(); tip.Dispose(); tray.Visible = false; tray.Dispose(); tick.Dispose(); anim.Dispose(); };
     }
 
     protected override CreateParams CreateParams { get { var cp = base.CreateParams; cp.ExStyle |= 0x80000 | 0x80; return cp; } }
@@ -234,12 +238,7 @@ sealed class QuotaForm : Form
     Account tipFor;
     void HoverTip(Point p)
     {
-        Account hit = null;
-        {
-            float y = p.Y / scale, ry = 32 - scrollY;
-            if (y >= 30 && y <= 30 + ListH)
-                foreach (var row in rows) { float rh = RowHeight(row); if (y >= ry && y < ry + rh) { if (row.Kind == "quota") hit = row.A; break; } ry += rh; }
-        }
+        var hit = RowAt(p, false);
         if (hit == tipFor) return;
         tipFor = hit;
         if (hit == null) { tip.Hide(this); return; }
@@ -252,7 +251,16 @@ sealed class QuotaForm : Form
             var proj = Projection(hit, win);
             lines.Add($"{WinLabel(win.mins)}  {Math.Max(0, 100 - used):0}% left  ·  {(wasReset ? "reset ✓" : win.reset > 0 ? "resets in " + Span(win.reset - Now) : "")}{(proj != null ? "  ·  " + proj : "")}");
         }
+        if (full && hit.Kind == "codex" && Active(hit)) lines.Add("click for usage history");
         tip.Show(string.Join("\n", lines), this, p.X + 16, p.Y + 22);   // clear of the pointer, or the tip blinks
+    }
+    // the quota row under p (codexOnly: only rows the history window can show)
+    Account RowAt(Point p, bool codexOnly = true)
+    {
+        float y = p.Y / scale, ry = 32 - scrollY;
+        if (y >= 30 && y <= 30 + ListH)
+            foreach (var row in rows) { float rh = RowHeight(row); if (y >= ry && y < ry + rh) return row.Kind == "quota" && (!codexOnly || row.A.Kind == "codex") ? row.A : null; ry += rh; }
+        return null;
     }
     void ApplySize() { scale = DeviceDpi / 96f * size * Tb; Size = new Size((int)(W * scale), (int)(H * scale)); }
 
@@ -260,9 +268,10 @@ sealed class QuotaForm : Form
     {
         if (fetching) return;
         fetching = true; if (!anim.Enabled) anim.Start();
-        Task.Run(Data.Fetch).ContinueWith(t =>
+        bool hist = full && DateTime.Now >= nextHist;               // a 31-day backfill from the logs at start, then hourly
+        Task.Run(() => Data.Fetch(hist)).ContinueWith(t =>
         {
-            try { BeginInvoke(() => { if (t.Exception == null) { snap = t.Result; CheckBonus(); RecordUsage(); CheckAlerts(); BuildRows(); scrollTarget = Math.Min(scrollTarget, MaxScroll); } else Program.Log(t.Exception); fetching = false; nextFetch = DateTime.Now.AddMinutes(refreshMin); ApplySize(); if (!anim.Enabled) anim.Start(); Render(); }); }
+            try { BeginInvoke(() => { if (t.Exception == null) { snap = t.Result; if (hist) { nextHist = DateTime.Now.AddHours(1); MergeHistory(); } CheckBonus(); RecordUsage(); CheckAlerts(); BuildRows(); scrollTarget = Math.Min(scrollTarget, MaxScroll); histForm?.Redraw(false); } else Program.Log(t.Exception); fetching = false; nextFetch = DateTime.Now.AddMinutes(refreshMin); ApplySize(); if (!anim.Enabled) anim.Start(); Render(); }); }
             catch { }
         });
     }
@@ -319,12 +328,20 @@ sealed class QuotaForm : Form
         mEd.DropDownItems.Add(Radio("Lite  (clean list)", () => !full, () => { full = false; tipFor = null; tip.Hide(this); BuildRows(); scrollTarget = Math.Min(scrollTarget, MaxScroll); ApplySize(); }));
         mEd.DropDownItems.Add(Radio("Full  (alerts, compact, history)", () => full, () => { full = true; BuildRows(); ApplySize(); }));
         mEd.DropDownItems.Add(new ToolStripSeparator());
-        var fullOnly = new[] {
-            Check("Windows alerts (reset / 90% / bonus)", () => notify, v => notify = v),
+        var mAlert = new ToolStripMenuItem("Low-quota alert at");
+        foreach (var (label, k) in new[] { ("30% left", 70), ("20% left", 80), ("10% left", 90), ("5% left", 95) }) mAlert.DropDownItems.Add(Radio(label, () => alertAt == k, () => { alertAt = k; alertState.Clear(); alertsSeeded = false; CheckAlerts(); }));
+        mAlert.DropDownItems.Add(new ToolStripSeparator());
+        mAlert.DropDownItems.Add(Check("Also when the pace runs out before the reset", () => alertPace, v => alertPace = v));
+        mAlert.DropDownOpening += (_, _) => RefreshChecks();
+        var fullOnly = new ToolStripItem[] {
+            Check("Windows alerts (low quota / reset / bonus)", () => notify, v => notify = v),
+            mAlert,
             Check("Compact rows (hover for details)", () => compact, v => { compact = v; scrollTarget = 0; ApplySize(); }),
-            Check("Usage history + run-out estimate", () => spark, v => spark = v) };
+            Check("Usage sparkline + run-out estimate", () => spark, v => spark = v),
+            new ToolStripMenuItem("Usage history window…", null, (_, _) => ShowHistory()) };
         foreach (var it in fullOnly) mEd.DropDownItems.Add(it);
         mEd.DropDownOpening += (_, _) => { foreach (var it in fullOnly) it.Enabled = full; };
+        var miHist = new ToolStripMenuItem("Usage history…", null, (_, _) => ShowHistory());
 
         var miTop = Check("Always on top", () => TopMost && !pinDesktop, v => { pinDesktop = false; ApplyPin(); TopMost = v; });
         var miPin = Check("Pin to desktop (like Rainmeter)", () => pinDesktop, v => { pinDesktop = v; ApplyPin(); });
@@ -337,9 +354,9 @@ sealed class QuotaForm : Form
         checks.Add((miStart, IsStartup));
         var miNow = new ToolStripMenuItem("Refresh now  (double-click)", null, (_, _) => Refresh_());
 
-        m.Opening += (_, _) => RefreshChecks();
+        m.Opening += (_, _) => { RefreshChecks(); miHist.Visible = full; };
         foreach (var sub in new[] { mTheme, mMode, mBg, mOp, mSize, mRows, mRef, mShow, mSort, mEd, mFont }) sub.DropDownOpening += (_, _) => RefreshChecks();
-        m.Items.AddRange(new ToolStripItem[] { miNow, new ToolStripSeparator(), mEd, mSort, new ToolStripSeparator(), mTheme, mMode, mFont, mBg, mOp, mSize, mRows, mRef, mShow, new ToolStripSeparator(), miPin, miTop, miDock, miThrough, miStart,
+        m.Items.AddRange(new ToolStripItem[] { miNow, miHist, new ToolStripSeparator(), mEd, mSort, new ToolStripSeparator(), mTheme, mMode, mFont, mBg, mOp, mSize, mRows, mRef, mShow, new ToolStripSeparator(), miPin, miTop, miDock, miThrough, miStart,
             new ToolStripSeparator(), new ToolStripMenuItem("Exit", null, (_, _) => Close()) });
         return m;
     }
@@ -424,7 +441,9 @@ sealed class QuotaForm : Form
         using var f = new QuotaForm();
         foreach (var kv in opts.Split(';').Select(x => x.Split('=')).Where(x => x.Length == 2))
             switch (kv[0]) { case "theme": f.theme = int.Parse(kv[1]); break; case "light": f.light = kv[1] == "1"; break; case "bg": f.bg = int.Parse(kv[1]); break; case "alpha": f.panelAlpha = int.Parse(kv[1]); break; case "full": f.full = kv[1] == "1"; break; case "compact": f.compact = kv[1] == "1"; break; case "bonus": f.bonusOpen = kv[1] == "1"; break; case "sort": f.sortMode = int.Parse(kv[1]); break; case "tab": f.tab = kv[1]; break; case "size": f.size = int.Parse(kv[1]) / 100f; break; case "font": f.fontKey = kv[1]; f.BuildFonts(); break; case "tbars": f.themeBars = kv[1] == "1"; break; case "frame": f.frame = int.Parse(kv[1]); break; }
-        f.snap = Data.Fetch(); f.CheckBonus(); f.RecordUsage(); f.BuildRows(); f.appear = 1; f.ApplySize(); for (int i = 0; i < 200 && f.Step(); i++) { }
+        f.snap = Data.Fetch(true); f.MergeHistory(); f.CheckBonus(); f.RecordUsage();
+        if (opts.Contains("hist=1")) { SnapshotHistory(f, file, 800, opts); f.tray.Visible = false; return; }
+        f.BuildRows(); f.appear = 1; f.ApplySize(); for (int i = 0; i < 200 && f.Step(); i++) { }
         using var bmp = new Bitmap(f.Width, f.Height, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
         {
@@ -800,29 +819,43 @@ sealed class QuotaForm : Form
     }
 
     // ---------------- usage history (Full) ----------------
-    // One reading per window every 15 min, kept 7 days in %APPDATA%\QuotaWidget\usage.txt. It feeds the sparkline and a
+    // One reading per window every 15 min, kept 31 days in %APPDATA%\QuotaWidget\usage.txt. It feeds the history window, the sparkline and a
     // straight-line estimate of when the window runs out at the current pace (only shown if that comes before the reset).
     readonly Dictionary<string, List<(double t, double used, double reset)>> usage = new();
     string UsagePath => Path.Combine(Path.GetDirectoryName(cfgPath), "usage.txt");
     bool usageLoaded;
 
-    void RecordUsage()
+    void LoadUsage()
+    {
+        if (usageLoaded) return;
+        usageLoaded = true;
+        var ic = System.Globalization.CultureInfo.InvariantCulture;
+        try
+        {
+            foreach (var l in File.ReadAllLines(UsagePath))
+            {
+                var p = l.Split('\t'); if (p.Length != 4) continue;
+                if (!usage.TryGetValue(p[0], out var ls)) usage[p[0]] = ls = new();
+                ls.Add((double.Parse(p[1], ic), double.Parse(p[2], ic), double.Parse(p[3], ic)));
+            }
+            foreach (var ls in usage.Values) ls.Sort((x, y) => x.t.CompareTo(y.t));
+        }
+        catch { }
+    }
+    void SaveUsage()
     {
         var ic = System.Globalization.CultureInfo.InvariantCulture;
-        if (!usageLoaded)
+        try
         {
-            usageLoaded = true;
-            try
-            {
-                foreach (var l in File.ReadAllLines(UsagePath))
-                {
-                    var p = l.Split('\t'); if (p.Length != 4) continue;
-                    if (!usage.TryGetValue(p[0], out var ls)) usage[p[0]] = ls = new();
-                    ls.Add((double.Parse(p[1], ic), double.Parse(p[2], ic), double.Parse(p[3], ic)));
-                }
-            }
-            catch { }
+            Directory.CreateDirectory(Path.GetDirectoryName(UsagePath));
+            File.WriteAllLines(UsagePath, usage.SelectMany(kv => kv.Value.Select(s => $"{kv.Key}\t{s.t.ToString(ic)}\t{s.used.ToString(ic)}\t{s.reset.ToString(ic)}")));
         }
+        catch { }
+    }
+
+    void RecordUsage()
+    {
+        LoadUsage();
         bool added = false;
         foreach (var a in (snap?.Accounts ?? new()).Where(a => a.Kind == "codex" && a.At > 0))
             foreach (var win in a.Win)
@@ -832,14 +865,8 @@ sealed class QuotaForm : Form
                 if (ls.Count > 0 && a.At - ls[^1].t < 900) continue;      // log time, so an idle account adds nothing
                 ls.Add((a.At, win.used, win.reset)); added = true;
             }
-        foreach (var ls in usage.Values) ls.RemoveAll(s => Now - s.t > 7 * 86400);
-        if (!added) return;
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(UsagePath));
-            File.WriteAllLines(UsagePath, usage.SelectMany(kv => kv.Value.Select(s => $"{kv.Key}\t{s.t.ToString(ic)}\t{s.used.ToString(ic)}\t{s.reset.ToString(ic)}")));
-        }
-        catch { }
+        foreach (var ls in usage.Values) ls.RemoveAll(s => Now - s.t > KeepDays * 86400);
+        if (added) SaveUsage();
     }
 
     // "out in ~X" when the pace over the last 6 h (same reset period) would hit 100% before the window resets
@@ -869,9 +896,10 @@ sealed class QuotaForm : Form
     }
 
     // ---------------- alerts (Full) ----------------
-    // A Windows balloon from the tray icon when a window resets, passes 90 %, or an early reset shows up.
+    // A Windows notification from the tray icon when a window gets low (10 % left by default; menu: 30 / 20 / 10 / 5 %), when the
+    // pace would run it out before its reset, when it resets, or when an early reset shows up. Clicking it opens the history.
     // The first pass after start only records the current state, so opening the widget does not fire a burst.
-    readonly Dictionary<string, int> alertState = new();   // 0 normal · 1 at 90 %+ · 2 reset passed
+    readonly Dictionary<string, int> alertState = new();   // 0 normal · 1 low · 2 reset passed · 3 pace runs out before reset
     bool alertsSeeded;
     void CheckAlerts()
     {
@@ -880,16 +908,18 @@ sealed class QuotaForm : Form
             foreach (var win in a.Win)
             {
                 var (used, wasReset) = Eff(win);
-                int s = wasReset ? 2 : used >= 90 ? 1 : 0;
+                var pace = alertPace ? Projection(a, win) : null;
+                int s = wasReset ? 2 : used >= alertAt ? 1 : pace != null ? 3 : 0;
                 string k = $"{a.Source}{a.Home}|{win.mins}";
                 alertState.TryGetValue(k, out var old); alertState[k] = s;
-                if (!alertsSeeded || s == old || s == 0) continue;
+                if (!alertsSeeded || s == old || s == 0 || (s == 3 && old == 1)) continue;
                 if (s == 2) Alert("Quota reset ✓", $"{a.Source} {a.Name} {WinLabel(win.mins)} is ready again");
-                else Alert("Quota almost used", $"{a.Source} {a.Name} {WinLabel(win.mins)} at {used:0}% · resets in {Span(win.reset - Now)}");
+                else if (s == 1) Alert("⚠ Quota low", $"{a.Source} {a.Name} {WinLabel(win.mins)}: {Math.Max(0, 100 - used):0}% left · resets in {Span(win.reset - Now)}", ToolTipIcon.Warning);
+                else Alert("⚠ Running out before the reset", $"{a.Source} {a.Name} {WinLabel(win.mins)}: {Math.Max(0, 100 - used):0}% left, {pace} · resets in {Span(win.reset - Now)}", ToolTipIcon.Warning);
             }
         alertsSeeded = true;
     }
-    void Alert(string title, string text) { if (Notify && alertsSeeded) try { tray.ShowBalloonTip(6000, title, text, ToolTipIcon.Info); } catch { } }
+    void Alert(string title, string text, ToolTipIcon icon = ToolTipIcon.Info) { if (Notify && alertsSeeded) try { tray.ShowBalloonTip(6000, title, text, icon); } catch { } }
 
     // ---------------- pin to desktop ----------------
     // Owned by the desktop window (Progman) and kept at the bottom of the z-order: it sits on the wallpaper under every window and
@@ -1002,6 +1032,7 @@ sealed class QuotaForm : Form
             size = Math.Clamp(I("size", 100), 60, 220) / 100f; light = I("light", 0) == 1; effects = I("fx", 1) == 1; showInactive = I("inactive", 0) == 1;
             showClaude = I("claude", 1) == 1; corners = I("corners", 1) == 1; clickThrough = I("through", 0) == 1; refreshMin = Math.Clamp(I("refresh", 5), 1, 60); pinDesktop = I("pin", 0) == 1; visibleRows = Math.Clamp(I("rows", 5), 3, 12);
             full = I("full", EditionDefault()) == 1; bonusOpen = I("bonus", 0) == 1; notify = I("notify", 1) == 1; compact = I("compact", 0) == 1; spark = I("spark", 1) == 1; sortMode = Math.Clamp(I("sort", 0), 0, Sorts.Length - 1); tab = kv.TryGetValue("tab", out var tb) ? tb : "all"; fontKey = kv.TryGetValue("font", out var fk) ? fk : "segoe"; link = I("link", 0) == 1; sameStyle = I("same", 1) == 1; themeBars = I("tbars", 0) == 1; frame = Math.Clamp(I("frame", 0), 0, 2);
+            alertAt = Math.Clamp(I("alertat", 90), 50, 99); alertPace = I("alertpace", 1) == 1; histDays = Ranges.Contains(I("histdays", 7)) ? I("histdays", 7) : 7;
         }
         catch { TopMost = true; full = EditionDefault() == 1; }
     }
@@ -1021,7 +1052,7 @@ sealed class QuotaForm : Form
             File.WriteAllLines(cfgPath, new[] { $"x={Left}", $"y={Top}", $"top={(TopMost ? 1 : 0)}", $"opacity={opacity}", $"theme={theme}", $"bg={bg}", $"alpha={panelAlpha}",
                 $"size={(int)Math.Round(size * 100)}", $"light={(light ? 1 : 0)}", $"fx={(effects ? 1 : 0)}", $"inactive={(showInactive ? 1 : 0)}", $"claude={(showClaude ? 1 : 0)}",
                 $"corners={(corners ? 1 : 0)}", $"through={(clickThrough ? 1 : 0)}", $"refresh={refreshMin}", $"pin={(pinDesktop ? 1 : 0)}", $"rows={visibleRows}",
-                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}", $"font={fontKey}", $"link={(link ? 1 : 0)}", $"same={(sameStyle ? 1 : 0)}", $"tbars={(themeBars ? 1 : 0)}", $"frame={frame}" });
+                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}", $"font={fontKey}", $"link={(link ? 1 : 0)}", $"same={(sameStyle ? 1 : 0)}", $"tbars={(themeBars ? 1 : 0)}", $"frame={frame}", $"alertat={alertAt}", $"alertpace={(alertPace ? 1 : 0)}", $"histdays={histDays}" });
             PublishGroup();
         }
         catch { }

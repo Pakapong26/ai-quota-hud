@@ -1,9 +1,13 @@
 # Quota collector for QuotaWidget: reads the logs Codex and Claude Code already write and prints one JSON line.
 # Read only, no network, no AI calls (so it uses no quota). Never opens auth.json or any credential file.
-# usage: python collector.py [home_dir]
+# usage: python collector.py [home_dir] [--hist[=DAYS]]
+#   --hist[=DAYS]  also prints each Codex home's rate-limit readings of the last DAYS days (default 7; one per window per
+#                  15 min) for the widget's history window
 import os, glob, json, sys, time, datetime
 
-home = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser('~')
+args = [a for a in sys.argv[1:] if not a.startswith('--')]
+home = args[0] if args else os.path.expanduser('~')
+HIST = next((int(a.split('=')[1]) if '=' in a else 7 for a in sys.argv[1:] if a.startswith('--hist')), 0)
 now = time.time()
 WEEK = 8 * 86400
 
@@ -20,7 +24,7 @@ def recent(pattern, age):
     return sorted(fs, key=os.path.getmtime, reverse=True)
 
 
-def codex(d):
+def codex(d, hist=True):
     files = recent(os.path.join(d, 'sessions', '**', '*.jsonl'), 400 * 86400)
     rec = {'home': os.path.basename(d), 'kind': 'codex', 'plan': None, 'at': None, 'win': [], 'tok5h': 0, 'tok24h': 0, 'blocked': None, 'model': None}
     found = False
@@ -60,7 +64,41 @@ def codex(d):
         if found and (i > 3 or now - os.path.getmtime(f) > 86400):
             break
     rec['auth'] = os.path.exists(os.path.join(d, 'auth.json'))
+    if HIST and hist:
+        rec['hist'] = history(files)
     return rec
+
+
+def history(files):
+    # [t, window_minutes, used_percent, resets_at], the last reading in each 15-minute slot, oldest first
+    slots = {}
+    for f in files:
+        if now - os.path.getmtime(f) > HIST * 86400:
+            break
+        try:
+            fh = open(f, encoding='utf-8', errors='ignore')
+        except Exception:
+            continue
+        for ln in fh:
+            if '"rate_limits":{' not in ln:
+                continue
+            try:
+                j = json.loads(ln)
+            except Exception:
+                continue
+            p = j.get('payload', j)
+            rl = p.get('rate_limits') or {}
+            t = iso(j.get('timestamp', '')) or 0
+            if rl.get('limit_id') != 'codex' or now - t > HIST * 86400:
+                continue
+            for k in ('primary', 'secondary'):
+                w = rl.get(k)
+                if w and w.get('window_minutes'):
+                    key = (w['window_minutes'], int(t // 900))
+                    if key not in slots or slots[key][0] <= t:
+                        slots[key] = [round(t, 1), w['window_minutes'], w.get('used_percent') or 0, w.get('resets_at') or 0]
+        fh.close()
+    return sorted(slots.values())
 
 
 def claude(d, name):
@@ -122,7 +160,7 @@ def xkiro():
     # Codex homes that route through xKiro: $XKIRO_CODEX_HOMES (a glob), default ~/.config/xkiro/codex/*
     for d in glob.glob(os.path.expanduser(os.environ.get('XKIRO_CODEX_HOMES', os.path.join(home, '.config', 'xkiro', 'codex', '*')))):
         if os.path.isdir(os.path.join(d, 'sessions')):
-            c = codex(d); rec['tok5h'] += c['tok5h']; rec['tok24h'] += c['tok24h']
+            c = codex(d, False); rec['tok5h'] += c['tok5h']; rec['tok24h'] += c['tok24h']
     return rec
 
 

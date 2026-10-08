@@ -23,9 +23,10 @@ Pick an edition (same app, you can switch any time from right-click → **Editio
 | Sort by last used / soonest reset / most left / most used | ✓ | ✓ |
 | Bonus check folds to one line (click to open, opens itself on an early reset) | ✓ | ✓ |
 | Font picker, severity colours, readable at small sizes | ✓ | ✓ |
-| Windows alerts: window reset, 90 % used, bonus reset | | ✓ |
+| Windows alerts: low quota (30 / 20 / 10 / 5 % left), runs out before reset, window reset, bonus reset | | ✓ |
 | Compact rows, one line per account (hover for details) | | ✓ |
 | 7-day usage sparkline + "out in ~X at this pace" | | ✓ |
+| **Usage history window**: 7 / 15 / 30 days per account, use per day, burn rate | | ✓ |
 
 - `…-lite-standalone.zip` / `…-full-standalone.zip`: just unzip and run `QuotaWidget.exe` (needs Python 3 only)
 - `…-lite-framework.zip` / `…-full-framework.zip`: tiny, need the [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) + Python 3
@@ -71,6 +72,10 @@ It never opens `auth.json` or any credential file. The xKiro key stays on the ma
   ![tabs](docs/tabs.png)
 - **★ USE** marks the account with the most quota left; sort by last used, soonest reset, most left or most used
 - Plans that only report a 7-day window show a quiet "—" in the 5H column, so rows stay aligned
+- **Usage history** (Full): click an account row, or right-click → **Usage history…**. Every window of every Codex account over 7, 15 or 30 days, how much of the weekly window each day used, and the burn rate now (%/h over the last 6 h, % in the last 24 h, ⚠ when the pace runs out before the reset). Click a card to see one account larger; double-click for all again. It reads the last 31 days straight from the logs, so it is full from the first start
+
+  ![usage history](docs/history.png)
+- **Low-quota alerts** (Full): a Windows notification when a window gets low (right-click → Edition → **Low-quota alert at** 30 / 20 / 10 / 5 % left), when the pace would run it out before the reset, when it resets, or on a bonus reset; click the notification to open the history
 - **Bonus / early reset check**: folds to one line (click its header) and opens itself when a new one shows up; each refresh is compared with the last; if usage drops or the reset time moves earlier before the scheduled reset, it flags *EARLY RESET* with the time (kept 48 h)
 - **Same account on LAP and VPS**: rows stay separate (each with its own countdown); the one with the older log sits underneath, dimmed, with "same as VPS · older by …" (hover any row for twin, plan and model details)
 - Shows 5 rows; scroll with the mouse wheel for the rest
@@ -155,7 +160,8 @@ Want a feature or found a bug? Tell me either way, all ideas welcome:
 - แท็บบนหัววิดเจ็ต **ALL / OPENAI / ANTHROPIC** คลิกเลือกได้ OPENAI แบ่งกลุ่มตามแพ็กเกจ (TEAM / PLUS / FREE) + xKiro + อื่นๆ ส่วน ANTHROPIC แบ่งตามโมเดล (OPUS / SONNET / HAIKU) เรียงจากใช้มากไปน้อย ถ้ามีเจ้าใหม่จะขึ้นแท็บเพิ่มเอง
 - มี 2 รุ่นให้เลือก สลับได้ในเมนูคลิกขวา → Edition
   - **Lite**: ★ USE บอกบัญชีที่ควรใช้, เรียงตามรีเซ็ตก่อน / เหลือมากสุด / ใช้มากสุด, ป้าย no 5H แทนช่องว่าง
-  - **Full**: ทุกอย่างใน Lite + แจ้งเตือน Windows (รีเซ็ตแล้ว / ใช้ถึง 90% / bonus reset), แถวแบบย่อ (ชี้เมาส์ดูรายละเอียด), กราฟใช้งาน 7 วัน และบอกว่าจะหมดในอีกกี่ชั่วโมงถ้าใช้ในอัตรานี้
+  - **Full**: ทุกอย่างใน Lite + แจ้งเตือน Windows (โควต้าใกล้หมด เลือกได้ 30 / 20 / 10 / 5% / ใช้เร็วจนจะหมดก่อนรีเซ็ต / รีเซ็ตแล้ว / bonus reset), แถวแบบย่อ (ชี้เมาส์ดูรายละเอียด), กราฟใช้งาน 7 วัน และบอกว่าจะหมดในอีกกี่ชั่วโมงถ้าใช้ในอัตรานี้
+  - **หน้าประวัติการใช้** (v1.5): คลิกที่บัญชีไหนก็เปิดดูย้อนหลังของบัญชีนั้น เลือกช่วง 7 / 15 / 30 วันได้ เห็นกราฟ % ที่ใช้ แท่งใช้ไปวันละเท่าไร และอัตราการใช้ตอนนี้ (burn rate) ดับเบิลคลิกเพื่อกลับไปดูทุกบัญชี อ่านย้อนหลังจาก log ได้ทันทีตั้งแต่เปิดครั้งแรก
 - บัญชีเดียวกันที่เห็นทั้งในเครื่องและบน VPS จะมีป้าย `= LAP` / `= VPS` และแถวที่ log เก่ากว่าจะจางลงพร้อมบอกว่าเก่ากว่ากี่นาที
 - โชว์ 5 แถว เลื่อนดูที่เหลือได้, 8 ธีม, มืด/สว่าง, ปรับความโปร่งใส, ย่อขยาย, ปักบนเดสก์ท็อปแบบ Rainmeter
 
@@ -180,6 +186,7 @@ Windows 桌面小部件，显示每个 Codex / ChatGPT、xKiro 和 Claude Code �
 - 标题栏标签页 **ALL / OPENAI / ANTHROPIC**：OpenAI 按套餐分组（TEAM / PLUS / FREE）+ xKiro + 其他，Anthropic 按模型分组（OPUS / SONNET / HAIKU）
 - 风险颜色与主题无关：蓝色正常，黄色剩余 ≤30 %，红色剩余 ≤10 %，绿色可用，并配有符号（⚠ ✓ ✕ ⏱）
 - 两个版本：**Lite**（简洁）和 **Full**（Windows 通知、紧凑行、7 天曲线、按当前速度预计何时用完），右键 → Edition 随时切换
+- **使用历史**（Full，v1.5）：点击任一账号查看它的历史，可选 7 / 15 / 30 天，显示每天用量和当前消耗速度，双击返回全部账号；额度不足提醒可设为剩余 30 / 20 / 10 / 5 %
 - 字体选择、边框（完整 / 淡 / 无）、缩小后文字仍清晰；行名称可在 `%APPDATA%\QuotaWidget\names.txt` 中自定义
 - 与 [System HUD](https://github.com/Pakapong26/system-hud-widget) 组合使用：自动吸附，「Group」模式下一起移动和缩放，宽度一致，共用颜色与字体，只保留一个带日期的时钟
 

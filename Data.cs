@@ -11,6 +11,7 @@ sealed class Account
     public double? FreeUsed, FreeLimit, Wallet;
     public double At, Tok5h, Tok24h, Tok7d; public int Msgs24h; public bool Auth = true;
     public List<WinInfo> Win = new();
+    public List<(double t, int mins, double used, double reset)> Hist;   // only when fetched with history (--hist)
     // the same Codex home name + plan on the laptop and on the VPS is treated as one account seen twice;
     // rows stay separate (each keeps its own countdown) and the one with the older log line is marked
     public Account Twin; public bool Older;
@@ -63,11 +64,14 @@ static class Data
     static string Dir => AppContext.BaseDirectory;
     static string Collector => Path.Combine(Dir, "collector.py");
 
-    public static Snapshot Fetch()
+    public static Snapshot Fetch() => Fetch(false);
+    // hist: also read the last 31 days of rate-limit readings from the logs (the widget asks at start and then hourly)
+    public static Snapshot Fetch(bool hist)
     {
         var s = new Snapshot { Time = DateTime.Now };
-        var t1 = Task.Run(() => Run(PyExe(), $"\"{Collector}\" \"{Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)}\"", null, 60));
-        var t2 = Task.Run(() => RunVps());
+        var flag = hist ? " --hist=31" : "";
+        var t1 = Task.Run(() => Run(PyExe(), $"\"{Collector}\" \"{Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)}\"{flag}", null, 90));
+        var t2 = Task.Run(() => RunVps(flag));
         try { var o = t1.Result; if (o != null) { Parse(o, "LAP", s); s.LapOk = true; } } catch (Exception ex) { Program.Log(ex); }
         try { var (o, err) = t2.Result; if (o != null) { Parse(o, "VPS", s); s.VpsOk = true; } else s.VpsErr = err; } catch (Exception ex) { Program.Log(ex); s.VpsErr = "error"; }
         return s;
@@ -81,14 +85,14 @@ static class Data
         return "py.exe";
     }
 
-    static (string, string) RunVps()
+    static (string, string) RunVps(string flag)
     {
         var env = ReadEnv();
         if (!env.TryGetValue("VPS_HOST", out var host) || !env.TryGetValue("VPS_USER", out var user) || !env.TryGetValue("VPS_KEY", out var key)) return (null, "no ~/.vps_env");
         var ssh = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "OpenSSH", "ssh.exe");
         if (!File.Exists(ssh)) ssh = "ssh.exe";
-        var args = $"-i \"{WinPath(key)}\" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new {user}@{host} python3 -";
-        var o = Run(ssh, args, File.ReadAllText(Collector), 60);
+        var args = $"-i \"{WinPath(key)}\" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new {user}@{host} python3 -{flag}";
+        var o = Run(ssh, args, File.ReadAllText(Collector), 90);
         return o == null ? (null, "offline") : (o, "");
     }
 
@@ -151,6 +155,8 @@ static class Data
                     double N(string k, double d) => x.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : d;
                     acc.Win.Add(new WinInfo { used = N("used", 0), mins = (int)N("mins", 0), reset = N("reset", 0), spent = N("spent", -1), cap = N("cap", -1) });
                 }
+            if (a.TryGetProperty("hist", out var hs) && hs.ValueKind == JsonValueKind.Array)
+                acc.Hist = hs.EnumerateArray().Where(x => x.GetArrayLength() == 4).Select(x => (x[0].GetDouble(), (int)x[1].GetDouble(), x[2].GetDouble(), x[3].GetDouble())).ToList();
             s.Accounts.Add(acc);
         }
     }

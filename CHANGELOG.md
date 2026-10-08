@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.5.0
+- **Usage history window** (Full; idea by @Kantorcodes): one card per Codex account with every rate-limit window over **7 / 15 / 30 days** (step lines that drop at each reset), how much of the long window each day used, and the burn rate now (%/h over 6 h, % in the last 24 h, run-out estimate)
+- **Click an account row** on the widget to open its history alone, larger; double-click the history window for all accounts again. Also in the menu, the tray menu, and by clicking an alert
+- History works on day one: `collector.py --hist=31` reads the last 31 days of readings from the same local logs (once at start, then hourly); readings are kept 31 days
+- **Low-quota alerts**: pick the level (30 / 20 / 10 / 5 % left, default 10 %), plus an optional alert when the current pace would run a window out before its reset
 ## v1.4.0
 - **Group mode with System HUD**: snap edge to edge, move and resize together, take the HUD's width when stacked, one clock with the date, same colours + font (optional), Split apart
 - Bars in the theme colour option (System HUD look); Frame full / subtle / none
