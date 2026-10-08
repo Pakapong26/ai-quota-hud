@@ -2,7 +2,7 @@
 # Read only, no network, no AI calls (so it uses no quota). Never opens auth.json or any credential file.
 # usage: python collector.py [home_dir] [--hist[=DAYS]]
 #   --hist[=DAYS]  also prints each Codex home's rate-limit readings of the last DAYS days (default 7; one per window per
-#                  15 min) for the widget's history window
+#                  15 min), and each Claude home's tokens per hour, for the widget's history window
 import os, glob, json, sys, time, datetime
 
 args = [a for a in sys.argv[1:] if not a.startswith('--')]
@@ -104,7 +104,8 @@ def history(files):
 def claude(d, name):
     rec = {'home': name, 'kind': 'claude', 'at': None, 'tok5h': 0, 'tok24h': 0, 'tok7d': 0, 'msgs24h': 0, 'model': None}
     seen = set()
-    for f in recent(os.path.join(d, 'projects', '**', '*.jsonl'), WEEK):
+    hours = {}                                       # --hist: tokens per hour (Claude Code logs have no limit %)
+    for f in recent(os.path.join(d, 'projects', '**', '*.jsonl'), max(WEEK, HIST * 86400)):
         try:
             fh = open(f, encoding='utf-8', errors='ignore')
         except Exception:
@@ -130,7 +131,11 @@ def claude(d, name):
             if now - t < 86400: rec['tok24h'] += n; rec['msgs24h'] += 1
             if now - t < 5 * 3600: rec['tok5h'] += n
             if t > (rec['at'] or 0): rec['at'] = t; rec['model'] = m.get('model')
+            if HIST and now - t < HIST * 86400:
+                h = int(t // 3600) * 3600; hours[h] = hours.get(h, 0) + n
         fh.close()
+    if HIST:
+        rec['thist'] = sorted([h, n] for h, n in hours.items())
     return rec
 
 

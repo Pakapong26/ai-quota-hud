@@ -1,4 +1,4 @@
-// Usage history (Full): a separate window with one card per Codex account. Each card has every rate-limit window as a line over
+// Usage history (Full): a separate window with one card per Codex account (and one per Claude Code home, in tokens). Each card has every rate-limit window as a line over
 // the chosen range (7 / 15 / 30 days; it drops back at each reset), how much of the long window was used per day, and the burn
 // rate right now. Click a card (or an account row on the widget) to see just that account, larger; double-click for all again.
 // The readings come from usage.txt plus a 30-day backfill that collector.py --hist reads from the same logs, so a new install
@@ -48,8 +48,12 @@ sealed partial class QuotaForm
                 }
                 ls.Sort((x, y) => x.t.CompareTo(y.t));
             }
-        if (added) SaveUsage();
+        int expired = usage.Values.Sum(ls => ls.RemoveAll(s => Now - s.t > KeepDays * 86400));
+        if (added || expired > 0) SaveUsage();
+        foreach (var a in (snap?.Accounts ?? new()).Where(a => a.Kind == "claude" && a.TokHist != null)) tokHist[a.Source + a.Home] = a.TokHist;
     }
+    // Claude Code logs have tokens but no limit %, so Claude cards show tokens per hour and per day (re-read hourly, not stored)
+    readonly Dictionary<string, List<(double t, double tok)>> tokHist = new();
 
     // % of a window used between two times: rises inside one reset period add up; after a reset the new period counts from 0
     static double Burn(List<(double t, double used, double reset)> ls, double from, double to)
@@ -58,7 +62,7 @@ sealed partial class QuotaForm
         for (int i = 1; i < ls.Count; i++)
         {
             var (p, q) = (ls[i - 1], ls[i]);
-            if (p.t < from || q.t > to) continue;
+            if (q.t < from || q.t >= to) continue;            // each rise belongs to the later reading, so none falls between two days
             sum += Math.Abs(q.reset - p.reset) < 900 ? Math.Max(0, q.used - p.used) : Math.Max(0, q.used);
         }
         return sum;
@@ -69,9 +73,11 @@ sealed partial class QuotaForm
 
     IEnumerable<Account> HistoryAccounts()
     {
-        var all = (snap?.Accounts ?? new()).Where(a => a.Kind == "codex" && Active(a) && !a.Older)
-            .OrderByDescending(a => a.Win.Sum(w => Series(a, w.mins).Count) > 1).ThenByDescending(MostUsed).ToList();
-        var one = all.Where(a => a.Source + a.Home == histFocus).ToList();
+        var acc = snap?.Accounts ?? new();
+        var all = acc.Where(a => a.Kind == "codex" && Active(a) && !a.Older)
+            .OrderByDescending(a => a.Win.Sum(w => Series(a, w.mins).Count) > 1).ThenByDescending(MostUsed)
+            .Concat(acc.Where(a => a.Kind == "claude" && tokHist.TryGetValue(a.Source + a.Home, out var th) && th.Count > 0).OrderByDescending(a => a.Tok7d)).ToList();
+        var one = acc.Where(a => a.Source + a.Home == histFocus && (a.Kind == "claude" || a.Kind == "codex" && Active(a))).Take(1).ToList();   // also an older twin
         return one.Count > 0 ? one : all;
     }
     bool OneAccount => histFocus != null && HistoryAccounts().Count() == 1 && HistoryAccounts().First().Source + HistoryAccounts().First().Home == histFocus;
@@ -114,7 +120,7 @@ sealed partial class QuotaForm
         if (accs.Count == 0) { Text(g, snap == null ? "loading…" : "no Codex accounts with rate-limit data yet", fLabel, dim, 16, y + 6, false); return y + 40; }
         foreach (var a in accs)
         {
-            HistoryCard(g, a, 10, y, w - 20, fLabel, fSm);
+            if (a.Kind == "claude") ClaudeHistoryCard(g, a, 10, y, w - 20, fLabel, fSm); else HistoryCard(g, a, 10, y, w - 20, fLabel, fSm);
             histHits.Add((new RectangleF(10, y, w - 20, CardH), "acc:" + a.Source + a.Home));
             y += CardH + 10;
         }
@@ -129,7 +135,7 @@ sealed partial class QuotaForm
         {
             if (key.StartsWith("range:")) { histDays = int.Parse(key[6..]); SaveSettings(); return true; }
             if (key == "all") { histFocus = null; return true; }
-            if (key.StartsWith("acc:") && histFocus == null) { histFocus = key[4..]; return true; }
+            if (key.StartsWith("acc:") && !OneAccount) { histFocus = key[4..]; return true; }
         }
         return false;
     }
@@ -189,6 +195,8 @@ sealed partial class QuotaForm
         for (int i = 0; i < wins.Count; i++)
         {
             var ls = Series(a, wins[i].mins).Where(s => s.t >= t0).ToList();
+            // the live reading too: the store keeps one per 15 min, and a reset in between must still show as a drop
+            if (a.At > t0 && (ls.Count == 0 || a.At > ls[^1].t)) ls.Add((a.At, wins[i].used, wins[i].reset));
             if (ls.Count == 0) continue;
             any = true;
             var pts = new List<PointF>();
@@ -267,6 +275,92 @@ sealed partial class QuotaForm
         }
     }
 
+    static string TokS(double n) => n >= 1e9 ? $"{n / 1e9:0.#}B" : n >= 1e6 ? $"{n / 1e6:0.#}M" : n >= 1e3 ? $"{n / 1e3:0}k" : $"{n:0}";   // short, for axes and bars
+    // Claude: tokens per hour as thin bars over the range, tokens per day as bars, and the 5 h / 24 h / 7 d totals
+    void ClaudeHistoryCard(Graphics g, Account a, float x, float y, float w, Font fLabel, Font fSm)
+    {
+        var ic = System.Globalization.CultureInfo.InvariantCulture;
+        using (var path = Round(new RectangleF(x, y, w, CardH), 10))
+        {
+            using var fill = new SolidBrush(light ? Color.FromArgb(250, 251, 254) : Color.FromArgb(14, 21, 36)); g.FillPath(fill, path);
+            using var pen = new Pen(Color.FromArgb(light ? 60 : 70, A2), 1f); g.DrawPath(pen, path);
+        }
+        using var ink = new SolidBrush(Ink); using var dim = new SolidBrush(Dim);
+        float hx = x + 12;
+        using (var d = new SolidBrush(a.Source == "VPS" ? A2 : A1)) g.FillEllipse(d, hx, y + 14, 6, 6);
+        Text(g, a.Source, fSm, dim, hx + 9, y + 10, false); hx += 12 + g.MeasureString(a.Source, fSm).Width;
+        Text(g, "Claude " + a.Name, fLabel, ink, hx, y + 8, false); hx += g.MeasureString("Claude " + a.Name, fLabel).Width + 4;
+        Text(g, (a.Model ?? "").Replace("claude-", ""), fSm, dim, hx, y + 10, false);
+        var note = "tokens · Claude logs have no limit %";
+        Text(g, note, fSm, dim, x + w - 12 - g.MeasureString(note, fSm).Width, y + 10, false);
+
+        int n = histDays; double t1 = Now, t0 = t1 - n * 86400.0;
+        float cx = x + 46, cy = y + 34, cw = (w - 58) * 0.66f, ch = ChartH;
+        var hrs = tokHist.TryGetValue(a.Source + a.Home, out var th) ? th.Where(h => h.t >= t0).ToList() : new();
+        int every = n <= 7 ? 1 : n <= 15 ? 2 : 5;
+        string DayLabel(DateTime d, bool shortForm) => n <= 7 ? d.ToString("ddd", ic)[..(shortForm ? 2 : 3)] : d.ToString("d/M", ic);
+        double peak = Math.Max(1, hrs.Select(h => h.tok).DefaultIfEmpty(0).Max());
+        using (var grid = new Pen(Color.FromArgb(light ? 30 : 34, Dim), 1f))
+        {
+            foreach (var f in new[] { 0.0, 0.5, 1.0 })
+            {
+                float gy = cy + ch - ch * (float)f; g.DrawLine(grid, cx, gy, cx + cw, gy);
+                var t = f == 0 ? "0" : TokS(peak * f); Text(g, t, fSm, dim, cx - 6 - g.MeasureString(t, fSm).Width, gy - 7, false);
+            }
+            var day = DateTime.Today.AddDays(-(n - 1));
+            for (int i = 0; i < n; i++, day = day.AddDays(1))
+            {
+                double ts = new DateTimeOffset(day).ToUnixTimeSeconds();
+                float dx = cx + (float)((ts - t0) / (t1 - t0)) * cw;
+                if (dx >= cx && (n <= 15 || i % every == 0)) g.DrawLine(grid, dx, cy, dx, cy + ch);
+                if ((n - 1 - i) % every != 0) continue;
+                var lab = DayLabel(day, false);
+                float mid = n <= 7 ? cx + (float)((ts + 43200 - t0) / (t1 - t0)) * cw : dx;
+                if (mid > cx - 4 && mid < cx + cw - 8) Text(g, lab, fSm, dim, mid - g.MeasureString(lab, fSm).Width / 2, cy + ch + 2, false);
+            }
+        }
+        if (hrs.Count == 0) Text(g, "no Claude Code use in this range", fSm, dim, cx + 8, cy + ch / 2 - 7, false);
+        else
+        {
+            // one thin bar per hour with use, so quiet hours stay empty
+            float bwH = Math.Max(1f, cw / (n * 24f) * 0.8f);
+            using var hb = new SolidBrush(A2);
+            foreach (var h in hrs)
+            {
+                float hx2 = cx + (float)((h.t - t0) / (t1 - t0)) * cw, hh = (float)(h.tok / peak) * ch;
+                g.FillRectangle(hb, hx2, cy + ch - hh, bwH, Math.Max(1, hh));
+            }
+        }
+
+        float bx = cx + cw + 30, bw = x + w - 12 - bx, slot = bw / n, top = cy + 22, bh = ch - 22;
+        Text(g, "TOKENS PER DAY", fSm, dim, bx, cy - 4, false);
+        var vals = new double[n]; var dd = DateTime.Today.AddDays(-(n - 1));
+        for (int i = 0; i < n; i++, dd = dd.AddDays(1))
+        {
+            double a0 = new DateTimeOffset(dd).ToUnixTimeSeconds(), a1 = a0 + 86400;
+            vals[i] = hrs.Where(h => h.t >= a0 && h.t < a1).Sum(h => h.tok);
+        }
+        double max = Math.Max(1, vals.Max());
+        bool numbers = slot >= 30;
+        int barEvery = n <= 7 ? 1 : Math.Max(1, (int)Math.Ceiling((g.MeasureString("30/10", fSm).Width + 2) / slot));
+        dd = DateTime.Today.AddDays(-(n - 1));
+        for (int i = 0; i < n; i++, dd = dd.AddDays(1))
+        {
+            float h = (float)(vals[i] / max) * (bh - 12), bxi = bx + i * slot + slot * 0.2f, bwi = Math.Max(1.5f, slot * 0.6f);
+            using (var tr = new SolidBrush(Color.FromArgb(light ? 22 : 28, A2))) g.FillRectangle(tr, bxi, top + 12, bwi, bh - 12);
+            using (var b = new SolidBrush(Color.FromArgb(i == n - 1 ? 150 : 255, A2))) g.FillRectangle(b, bxi, top + bh - h, bwi, Math.Max(h, vals[i] > 0 ? 1 : 0));
+            if (numbers && vals[i] > 0) { var t = TokS(vals[i]); Text(g, t, fSm, dim, bxi + bwi / 2 - g.MeasureString(t, fSm).Width / 2, top + bh - h - 13, false); }
+            if ((n - 1 - i) % barEvery != 0) continue;
+            var lab = DayLabel(dd, true);
+            Text(g, lab, fSm, dim, bxi + bwi / 2 - g.MeasureString(lab, fSm).Width / 2, cy + ch + 2, false);
+        }
+        if (!numbers && vals.Max() > 0) Text(g, $"max {TokS(vals.Max())}  ·  avg {TokS(vals.Average())}/day", fSm, dim, bx, cy + ch + 16, false);
+
+        float sy = cy + ch + 20 + (bw / n < 20 ? 12 : 0);
+        using (var lb = new SolidBrush(A2)) g.FillRectangle(lb, x + 12, sy + 5, 8, 3);
+        Text(g, $"tokens  5h {Tok(a.Tok5h)}   ·   24h {Tok(a.Tok24h)}   ·   7d {Tok(a.Tok7d)}   ·   {a.Msgs24h} replies in 24h", fSm, ink, x + 26, sy, false);
+    }
+
     (Font head, Font label, Font small) HistoryFonts()
     {
         var s = FontSets.FirstOrDefault(f => f.key == fontKey && HasSet(f)); if (s.key == null) s = FontSets[0];
@@ -275,65 +369,151 @@ sealed partial class QuotaForm
     }
 
     // the page is drawn at 96 dpi into a bitmap and scaled once, like the widget, so text and lines keep the same proportions
-    // on every display scale
+    // on every display scale. The history window can have its own theme and dark/light (or follow the widget).
+    int histTheme = -1, histLight = -1, histOpacity = 100;   // -1 = same as the widget
+    bool histTop, histBorderless;
+    Rectangle histBounds;
+    Color HistBack => (histLight < 0 ? light : histLight == 1) ? Color.FromArgb(236, 240, 246) : Color.FromArgb(7, 11, 20);
     Bitmap RenderHistory(int pixelW, float s, out float pageH)
     {
         var (fh, fl, fs) = HistoryFonts();
-        using (fh) using (fl) using (fs)
+        int theme0 = theme; bool light0 = light;
+        if (histTheme >= 0 && histTheme < Themes.Length) theme = histTheme;
+        if (histLight >= 0) light = histLight == 1;
+        try
         {
-            float w = pixelW / s; pageH = DrawHistoryHeight();
-            var bmp = new Bitmap(pixelW, Math.Max(1, (int)Math.Ceiling(pageH * s)), PixelFormat.Format32bppArgb);
-            using var g = Graphics.FromImage(bmp);
-            g.Clear(light ? Color.FromArgb(236, 240, 246) : Color.FromArgb(7, 11, 20));
-            g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit; g.ScaleTransform(s, s);
-            DrawHistory(g, w, fh, fl, fs);
-            return bmp;
+            using (fh) using (fl) using (fs)
+            {
+                float w = pixelW / s; pageH = DrawHistoryHeight();
+                var bmp = new Bitmap(pixelW, Math.Max(1, (int)Math.Ceiling(pageH * s)), PixelFormat.Format32bppArgb);
+                using var g = Graphics.FromImage(bmp);
+                g.Clear(HistBack);
+                g.SmoothingMode = SmoothingMode.AntiAlias; g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit; g.ScaleTransform(s, s);
+                DrawHistory(g, w, fh, fl, fs);
+                return bmp;
+            }
         }
+        finally { theme = theme0; light = light0; }
     }
 
-    // a normal, resizable window; the page scrolls when there are many accounts
+    // A normal, resizable window (or borderless, HUD style); the page scrolls when there are many accounts.
+    // Right-click: range, always on top, opacity, theme, dark / light, borderless. Size and place are remembered.
     sealed class HistoryForm : Form
     {
         readonly QuotaForm q; readonly Canvas canvas; readonly Panel scroller;
-        Color Back => q.light ? Color.FromArgb(236, 240, 246) : Color.FromArgb(7, 11, 20);
         public HistoryForm(QuotaForm owner)
         {
             q = owner;
             Text = "AI Quota - usage history"; Icon = SystemIcons.Information; StartPosition = FormStartPosition.Manual; ShowInTaskbar = true;
-            BackColor = Back;
-            scroller = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Back };
-            canvas = new Canvas(this) { Location = Point.Empty, BackColor = Back };
+            scroller = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            canvas = new Canvas { Location = Point.Empty };
             scroller.Controls.Add(canvas); Controls.Add(scroller);
             scroller.Resize += (_, _) => Redraw(false);
-            canvas.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left && q.HistoryClick(e.X / DpiScale, e.Y / DpiScale)) Redraw(true); };
+            // press and drag moves the window; press and release in place is a click (range chips, cards)
+            canvas.MouseDown += (_, e) =>
+            {
+                if (e.Button != MouseButtons.Left || e.Clicks > 1) return;
+                var before = Location;
+                ReleaseCapture(); SendMessage(Handle, 0xA1, 2, 0);
+                if (Location == before && q.HistoryClick(e.X / DpiScale, e.Y / DpiScale)) Redraw(true);
+            };
             canvas.MouseDoubleClick += (_, _) => { if (q.histFocus != null) { q.histFocus = null; Redraw(true); } };
-            canvas.MouseMove += (_, e) => canvas.Cursor = q.histHits.Any(h => h.r.Contains(e.X / DpiScale, e.Y / DpiScale) && (q.histFocus == null || !h.key.StartsWith("acc:"))) ? Cursors.Hand : Cursors.Default;
+            canvas.MouseMove += (_, e) => canvas.Cursor = q.histHits.Any(h => h.r.Contains(e.X / DpiScale, e.Y / DpiScale) && (!q.OneAccount || !h.key.StartsWith("acc:"))) ? Cursors.Hand : Cursors.SizeAll;
+            canvas.ContextMenuStrip = Menu();
+            ResizeEnd += (_, _) => Remember();
         }
         float DpiScale => DeviceDpi / 96f;
         protected override void OnLoad(EventArgs e)
         {
             // sized here, once the window knows its monitor's DPI (in the constructor it still reports 96)
             float s = DpiScale; var wa = Screen.FromControl(q).WorkingArea;
-            MinimumSize = new Size((int)(600 * s), (int)(320 * s));
-            Size = new Size(Math.Min((int)(800 * s), wa.Width), Math.Min((int)(640 * s), wa.Height));
-            Location = new Point(Math.Max(wa.Left, Math.Min(q.Left - Width - 12, wa.Right - Width)), Math.Max(wa.Top, Math.Min(q.Top, wa.Bottom - Height)));
+            MinimumSize = new Size((int)(420 * s), (int)(240 * s));
+            var hb = q.histBounds;
+            if (!hb.IsEmpty && Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(hb))) Bounds = hb;
+            else
+            {
+                Size = new Size(Math.Min((int)(800 * s), wa.Width), Math.Min((int)(640 * s), wa.Height));
+                Location = new Point(Math.Max(wa.Left, Math.Min(q.Left - Width - 12, wa.Right - Width)), Math.Max(wa.Top, Math.Min(q.Top, wa.Bottom - Height)));
+            }
+            ApplyLook();
             base.OnLoad(e);
+        }
+        void Remember() { if (WindowState == FormWindowState.Normal) { q.histBounds = Bounds; q.SaveSettings(); } }
+        protected override void OnFormClosing(FormClosingEventArgs e) { Remember(); base.OnFormClosing(e); }
+
+        void ApplyLook()
+        {
+            TopMost = q.histTop;
+            Opacity = Math.Clamp(q.histOpacity, 25, 100) / 100.0;
+            var b = q.histBorderless ? FormBorderStyle.None : FormBorderStyle.Sizable;
+            if (FormBorderStyle != b) { var r = Bounds; FormBorderStyle = b; Bounds = r; }
+            Padding = q.histBorderless ? new Padding(Math.Max(3, (int)(4 * DpiScale))) : Padding.Empty;   // the edge you drag to resize
         }
         public void Redraw(bool toTop)
         {
             if (IsDisposed) return;
-            BackColor = scroller.BackColor = canvas.BackColor = Back;
+            var back = q.HistBack;
+            int th = q.histTheme >= 0 && q.histTheme < Themes.Length ? q.histTheme : q.theme;
+            BackColor = q.histBorderless ? Blend(Themes[th].a1, back, 0.55f) : back;    // borderless: the padding is a thin rim
+            scroller.BackColor = canvas.BackColor = back;
             canvas.Page?.Dispose();
             canvas.Page = q.RenderHistory(Math.Max(1, scroller.ClientSize.Width), DpiScale, out _);
             canvas.Size = canvas.Page.Size;
             if (toTop) scroller.AutoScrollPosition = Point.Empty;
             canvas.Invalidate();
         }
-        protected override void OnFormClosed(FormClosedEventArgs e) { canvas.Page?.Dispose(); base.OnFormClosed(e); }
+
+        ContextMenuStrip Menu()
+        {
+            var m = new ContextMenuStrip { ShowCheckMargin = true, ShowImageMargin = false, Renderer = new ToolStripProfessionalRenderer(new MenuColors()), ForeColor = Color.FromArgb(232, 246, 255) };
+            var items = new List<(ToolStripMenuItem it, Func<bool> on)>();
+            ToolStripMenuItem Item(string text, Func<bool> on, Action set)
+            {
+                var it = new ToolStripMenuItem(text);
+                it.Click += (_, _) => { set(); ApplyLook(); Redraw(false); q.SaveSettings(); };
+                items.Add((it, on)); return it;
+            }
+            var mRange = new ToolStripMenuItem("Range");
+            foreach (var d in Ranges) { int k = d; mRange.DropDownItems.Add(Item($"{k} days", () => q.histDays == k, () => q.histDays = k)); }
+            var mOp = new ToolStripMenuItem("Opacity");
+            foreach (var o in new[] { 100, 90, 80, 70, 55, 40 }) { int k = o; mOp.DropDownItems.Add(Item($"{k}%", () => q.histOpacity == k, () => q.histOpacity = k)); }
+            var mTheme = new ToolStripMenuItem("Colour theme");
+            mTheme.DropDownItems.Add(Item("Same as the widget", () => q.histTheme < 0, () => q.histTheme = -1));
+            mTheme.DropDownItems.Add(new ToolStripSeparator());
+            for (int i = 0; i < Themes.Length; i++) { int k = i; mTheme.DropDownItems.Add(Item(Themes[i].name, () => q.histTheme == k, () => q.histTheme = k)); }
+            var mMode = new ToolStripMenuItem("Dark / light");
+            mMode.DropDownItems.Add(Item("Same as the widget", () => q.histLight < 0, () => q.histLight = -1));
+            mMode.DropDownItems.Add(Item("Dark", () => q.histLight == 0, () => q.histLight = 0));
+            mMode.DropDownItems.Add(Item("Light", () => q.histLight == 1, () => q.histLight = 1));
+            var miAll = new ToolStripMenuItem("All accounts  (double-click)", null, (_, _) => { q.histFocus = null; Redraw(true); });
+            m.Items.AddRange(new ToolStripItem[] {
+                mRange, miAll, new ToolStripSeparator(),
+                Item("Always on top", () => q.histTop, () => q.histTop = !q.histTop),
+                Item("Borderless (HUD look; drag to move, edges to resize)", () => q.histBorderless, () => q.histBorderless = !q.histBorderless),
+                mOp, mTheme, mMode, new ToolStripSeparator(),
+                new ToolStripMenuItem("Close", null, (_, _) => Close()) });
+            void Sync() { foreach (var (it, on) in items) it.Checked = on(); miAll.Enabled = q.histFocus != null; }
+            m.Opening += (_, _) => Sync();
+            foreach (var sub in new[] { mRange, mOp, mTheme, mMode }) sub.DropDownOpening += (_, _) => Sync();
+            return m;
+        }
+
+        // borderless: the thin padding round the page resizes the window like a normal frame
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (m.Msg != 0x84 || !q.histBorderless || WindowState != FormWindowState.Normal) return;   // WM_NCHITTEST
+            var p = PointToClient(new Point(unchecked((short)(long)m.LParam), unchecked((short)((long)m.LParam >> 16))));
+            int e = Math.Max(6, Padding.Left + 3);
+            bool l = p.X < e, r = p.X >= ClientSize.Width - e, t = p.Y < e, b = p.Y >= ClientSize.Height - e;
+            int hit = t && l ? 13 : t && r ? 14 : b && l ? 16 : b && r ? 17 : l ? 10 : r ? 11 : t ? 12 : b ? 15 : 0;
+            if (hit != 0) m.Result = (IntPtr)hit;
+        }
+        protected override void OnFormClosed(FormClosedEventArgs e) { canvas.Page?.Dispose(); canvas.ContextMenuStrip?.Dispose(); base.OnFormClosed(e); }
         sealed class Canvas : Control
         {
             public Bitmap Page;
-            public Canvas(HistoryForm f) { DoubleBuffered = true; }
+            public Canvas() { DoubleBuffered = true; }
             protected override void OnPaint(PaintEventArgs e) { if (Page != null) e.Graphics.DrawImageUnscaled(Page, 0, 0); }
         }
     }

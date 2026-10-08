@@ -2,8 +2,12 @@
 
 ## v1.5.0
 - **Usage history window** (Full; idea by @Kantorcodes): one card per Codex account with every rate-limit window over **7 / 15 / 30 days** (step lines that drop at each reset), how much of the long window each day used, and the burn rate now (%/h over 6 h, % in the last 24 h, run-out estimate)
+- **Claude Code cards** in the same window: tokens per hour and per day over the range, plus 5 h / 24 h / 7 d totals (Claude Code logs have no limit %, so this is tokens, not % left)
+- The history window is customisable from right-click: always on top, opacity, its own colour theme and dark / light (or follow the widget), borderless HUD look (drag to move, edges to resize); size and place are remembered
 - **Click an account row** on the widget to open its history alone, larger; double-click the history window for all accounts again. Also in the menu, the tray menu, and by clicking an alert
 - History works on day one: `collector.py --hist=31` reads the last 31 days of readings from the same local logs (once at start, then hourly); readings are kept 31 days
+- Linked with System HUD side by side, only System HUD shows the clock (stacked, the top one still shows it with the date)
+- Fixes from a GPT-6.1-sol review: per-day use no longer loses a rise across midnight, the chart catches a reset between stored readings, the history menu is disposed, an older LAP/VPS twin opens its own history, expired readings are pruned on disk
 - **Low-quota alerts**: pick the level (30 / 20 / 10 / 5 % left, default 10 %), plus an optional alert when the current pace would run a window out before its reset
 ## v1.4.0
 - **Group mode with System HUD**: snap edge to edge, move and resize together, take the HUD's width when stacked, one clock with the date, same colours + font (optional), Split apart

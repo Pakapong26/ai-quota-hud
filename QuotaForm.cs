@@ -110,7 +110,8 @@ sealed partial class QuotaForm : Form
     const int BaseW = 430, SubH = 24, HeadH = 20;
     float Tb => Math.Clamp(0.8f / size, 1f, 1.45f);
     float baseW = BaseW;
-    int hudSide;                                             // linked: 1 = this sits under System HUD, -1 = above it, 0 = apart / side by side                                     // narrower when linked under System HUD, to match its width
+    int hudSide;                                             // linked: 1 = this sits under System HUD, -1 = above it, 0 = apart / side by side
+    bool hudLinked;                                          // linked and System HUD is running: it keeps the only clock unless this one is on top
     int W => (int)Math.Round(baseW / Tb);
     bool Narrow => W < 380;
     int RowH => Compact ? 22 : 42;
@@ -200,7 +201,7 @@ sealed partial class QuotaForm : Form
             if (OnBonusHeader(e.Location)) { bonusOpen = !bonusOpen; ApplySize(); SaveSettings(); Render(); return; }
             var before = Location;
             ReleaseCapture(); SendMessage(Handle, 0xA1, 2, 0); SaveSettings();   // returns when the button is released
-            if (full && Location == before && RowAt(e.Location) is Account clicked) ShowHistory(clicked);   // a click, not a drag
+            if (full && Location == before && (RowAt(e.Location) ?? ClaudeRowAt(e.Location)) is Account clicked) ShowHistory(clicked);   // a click, not a drag
         };
         MouseMove += (_, e) =>
         {
@@ -251,7 +252,7 @@ sealed partial class QuotaForm : Form
             var proj = Projection(hit, win);
             lines.Add($"{WinLabel(win.mins)}  {Math.Max(0, 100 - used):0}% left  ·  {(wasReset ? "reset ✓" : win.reset > 0 ? "resets in " + Span(win.reset - Now) : "")}{(proj != null ? "  ·  " + proj : "")}");
         }
-        if (full && hit.Kind == "codex" && Active(hit)) lines.Add("click for usage history");
+        if (full && (hit.Kind == "codex" && Active(hit) || hit.Kind == "claude")) lines.Add("click for usage history");
         tip.Show(string.Join("\n", lines), this, p.X + 16, p.Y + 22);   // clear of the pointer, or the tip blinks
     }
     // the quota row under p (codexOnly: only rows the history window can show)
@@ -260,6 +261,13 @@ sealed partial class QuotaForm : Form
         float y = p.Y / scale, ry = 32 - scrollY;
         if (y >= 30 && y <= 30 + ListH)
             foreach (var row in rows) { float rh = RowHeight(row); if (y >= ry && y < ry + rh) return row.Kind == "quota" && (!codexOnly || row.A.Kind == "codex") ? row.A : null; ry += rh; }
+        return null;
+    }
+    Account ClaudeRowAt(Point p)
+    {
+        float y = p.Y / scale, ry = 32 - scrollY;
+        if (y >= 30 && y <= 30 + ListH)
+            foreach (var row in rows) { float rh = RowHeight(row); if (y >= ry && y < ry + rh) return row.Kind == "claude" ? row.A : null; ry += rh; }
         return null;
     }
     void ApplySize() { scale = DeviceDpi / 96f * size * Tb; Size = new Size((int)(W * scale), (int)(H * scale)); }
@@ -490,8 +498,8 @@ sealed partial class QuotaForm : Form
         }
 
         using var ink = new SolidBrush(Color.FromArgb((int)(255 * Math.Max(0.15f, appear)), Ink)); using var dim = new SolidBrush(Dim); using var acc = new SolidBrush(AccentText(A1)); using var acc2 = new SolidBrush(AccentText(A2));
-        // linked as one panel: the top widget shows one clock with the date, the lower one none
-        var clock = hudSide == 1 ? "" : hudSide == -1 ? DateTime.Now.ToString(Narrow ? "ddd dd MMM  HH:mm" : "ddd dd MMM  HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) : DateTime.Now.ToString(Narrow ? "HH:mm" : "HH:mm:ss");
+        // linked as one panel: the top widget shows one clock with the date, the lower one none; side by side, System HUD keeps it
+        var clock = hudSide == 1 || (hudLinked && hudSide == 0) ? "" : hudSide == -1 ? DateTime.Now.ToString(Narrow ? "ddd dd MMM  HH:mm" : "ddd dd MMM  HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) : DateTime.Now.ToString(Narrow ? "HH:mm" : "HH:mm:ss");
         if (hudSide == -1 && 20 + TabsWidth(g, true) >= w - 28 - g.MeasureString(clock, fNum).Width) clock = DateTime.Now.ToString("HH:mm");
         float clockX = w - 20 - g.MeasureString(clock, fNum).Width, titleW = g.MeasureString("AI QUOTA", fTitle).Width + 6;
         bool showTitle = 20 + titleW + TabsWidth(g, Narrow) < clockX - 8, shortTabs = Narrow || 20 + TabsWidth(g, false) >= clockX - 8;
@@ -865,8 +873,8 @@ sealed partial class QuotaForm : Form
                 if (ls.Count > 0 && a.At - ls[^1].t < 900) continue;      // log time, so an idle account adds nothing
                 ls.Add((a.At, win.used, win.reset)); added = true;
             }
-        foreach (var ls in usage.Values) ls.RemoveAll(s => Now - s.t > KeepDays * 86400);
-        if (added) SaveUsage();
+        int expired = usage.Values.Sum(ls => ls.RemoveAll(s => Now - s.t > KeepDays * 86400));
+        if (added || expired > 0) SaveUsage();
     }
 
     // "out in ~X" when the pace over the last 6 h (same reset period) would hit 100% before the window resets
@@ -999,7 +1007,7 @@ sealed partial class QuotaForm : Form
     void FollowHud()
     {
         var p = link ? WidgetDock.RectOf(WidgetDock.HudTitle) : null;
-        float want = BaseW; hudSide = 0;
+        float want = BaseW; hudSide = 0; hudLinked = p is Rectangle;
         if (p is Rectangle hr)
         {
             var me = Bounds;
@@ -1033,6 +1041,9 @@ sealed partial class QuotaForm : Form
             showClaude = I("claude", 1) == 1; corners = I("corners", 1) == 1; clickThrough = I("through", 0) == 1; refreshMin = Math.Clamp(I("refresh", 5), 1, 60); pinDesktop = I("pin", 0) == 1; visibleRows = Math.Clamp(I("rows", 5), 3, 12);
             full = I("full", EditionDefault()) == 1; bonusOpen = I("bonus", 0) == 1; notify = I("notify", 1) == 1; compact = I("compact", 0) == 1; spark = I("spark", 1) == 1; sortMode = Math.Clamp(I("sort", 0), 0, Sorts.Length - 1); tab = kv.TryGetValue("tab", out var tb) ? tb : "all"; fontKey = kv.TryGetValue("font", out var fk) ? fk : "segoe"; link = I("link", 0) == 1; sameStyle = I("same", 1) == 1; themeBars = I("tbars", 0) == 1; frame = Math.Clamp(I("frame", 0), 0, 2);
             alertAt = Math.Clamp(I("alertat", 90), 50, 99); alertPace = I("alertpace", 1) == 1; histDays = Ranges.Contains(I("histdays", 7)) ? I("histdays", 7) : 7;
+            histTop = I("histtop", 0) == 1; histBorderless = I("histborder", 0) == 1; histOpacity = Math.Clamp(I("histop", 100), 25, 100);
+            histTheme = Math.Clamp(I("histtheme", -1), -1, Themes.Length - 1); histLight = Math.Clamp(I("histlight", -1), -1, 1);
+            if (I("histw", 0) > 0) histBounds = new Rectangle(I("histx", 0), I("histy", 0), I("histw", 0), I("histh", 0));
         }
         catch { TopMost = true; full = EditionDefault() == 1; }
     }
@@ -1052,7 +1063,8 @@ sealed partial class QuotaForm : Form
             File.WriteAllLines(cfgPath, new[] { $"x={Left}", $"y={Top}", $"top={(TopMost ? 1 : 0)}", $"opacity={opacity}", $"theme={theme}", $"bg={bg}", $"alpha={panelAlpha}",
                 $"size={(int)Math.Round(size * 100)}", $"light={(light ? 1 : 0)}", $"fx={(effects ? 1 : 0)}", $"inactive={(showInactive ? 1 : 0)}", $"claude={(showClaude ? 1 : 0)}",
                 $"corners={(corners ? 1 : 0)}", $"through={(clickThrough ? 1 : 0)}", $"refresh={refreshMin}", $"pin={(pinDesktop ? 1 : 0)}", $"rows={visibleRows}",
-                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}", $"font={fontKey}", $"link={(link ? 1 : 0)}", $"same={(sameStyle ? 1 : 0)}", $"tbars={(themeBars ? 1 : 0)}", $"frame={frame}", $"alertat={alertAt}", $"alertpace={(alertPace ? 1 : 0)}", $"histdays={histDays}" });
+                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}", $"font={fontKey}", $"link={(link ? 1 : 0)}", $"same={(sameStyle ? 1 : 0)}", $"tbars={(themeBars ? 1 : 0)}", $"frame={frame}", $"alertat={alertAt}", $"alertpace={(alertPace ? 1 : 0)}", $"histdays={histDays}",
+                $"histtop={(histTop ? 1 : 0)}", $"histborder={(histBorderless ? 1 : 0)}", $"histop={histOpacity}", $"histtheme={histTheme}", $"histlight={histLight}", $"histx={histBounds.X}", $"histy={histBounds.Y}", $"histw={histBounds.Width}", $"histh={histBounds.Height}" });
             PublishGroup();
         }
         catch { }

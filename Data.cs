@@ -12,6 +12,7 @@ sealed class Account
     public double At, Tok5h, Tok24h, Tok7d; public int Msgs24h; public bool Auth = true;
     public List<WinInfo> Win = new();
     public List<(double t, int mins, double used, double reset)> Hist;   // only when fetched with history (--hist)
+    public List<(double t, double tok)> TokHist;                          // Claude: tokens per hour, also only with --hist
     // the same Codex home name + plan on the laptop and on the VPS is treated as one account seen twice;
     // rows stay separate (each keeps its own countdown) and the one with the older log line is marked
     public Account Twin; public bool Older;
@@ -157,6 +158,8 @@ static class Data
                 }
             if (a.TryGetProperty("hist", out var hs) && hs.ValueKind == JsonValueKind.Array)
                 acc.Hist = hs.EnumerateArray().Where(x => x.GetArrayLength() == 4).Select(x => (x[0].GetDouble(), (int)x[1].GetDouble(), x[2].GetDouble(), x[3].GetDouble())).ToList();
+            if (a.TryGetProperty("thist", out var th) && th.ValueKind == JsonValueKind.Array)
+                acc.TokHist = th.EnumerateArray().Where(x => x.GetArrayLength() == 2).Select(x => (x[0].GetDouble(), x[1].GetDouble())).ToList();
             s.Accounts.Add(acc);
         }
     }
