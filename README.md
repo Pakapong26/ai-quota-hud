@@ -8,7 +8,7 @@ A sci-fi desktop widget for Windows that shows how much of your AI coding quota 
 
 *(demo data)*
 
-> ไทย: ดูหัวข้อ [ภาษาไทย](#ภาษาไทย) ด้านล่าง · Looking for CPU/GPU monitoring? See [system-hud-widget](https://github.com/Pakapong26/system-hud-widget).
+> ไทย: ดูหัวข้อ [ภาษาไทย](#ภาษาไทย) ด้านล่าง · 中文：见下方 [简体中文](#简体中文) · Looking for CPU/GPU monitoring? See [system-hud-widget](https://github.com/Pakapong26/system-hud-widget).
 
 ## Download
 
@@ -38,6 +38,19 @@ Pick an edition (same app, you can switch any time from right-click → **Editio
 
 Keep `collector.py` next to the exe. Right-click the widget for settings. Windows SmartScreen may warn because the exe is unsigned; build from source below if you prefer.
 
+## Use them together as one panel
+
+[System HUD](https://github.com/Pakapong26/system-hud-widget) and [AI Quota HUD](https://github.com/Pakapong26/ai-quota-hud) are made to sit together:
+
+![System HUD + AI Quota HUD](docs/pair.gif)
+
+*(AI quota rows use demo data)*
+
+- Drag one close to the other: it **snaps** edge to edge
+- Right-click → **Group with …** → **Linked**: move and resize together; stacked, AI Quota HUD takes the HUD's width so the two read as one panel, with a single clock and the date on top
+- **Same colours + font**: theme, background, opacity, frame and font follow each other (turn it off to style them separately); **Split apart** to go back to two widgets
+- Right-click → Background → **Frame: none** for a borderless look
+
 ## It uses zero quota
 
 It never calls a model. It only reads what the tools already write:
@@ -62,13 +75,14 @@ It never opens `auth.json` or any credential file. The xKiro key stays on the ma
 - **Same account on LAP and VPS**: rows stay separate (each with its own countdown); the one with the older log sits underneath, dimmed, with "same as VPS · older by …" (hover any row for twin, plan and model details)
 - Shows 5 rows; scroll with the mouse wheel for the rest
 - 8 colour themes, dark / light, glass / tinted / solid / floating, panel and whole-widget opacity
+- **Row names**: put `home=name` or `SOURCE/home=name` lines in `%APPDATA%\QuotaWidget\names.txt` (e.g. `LAP/.codex=work`); homes that are logged in but not used yet already get a row
 - **Font picker** (right-click → Font): Segoe UI (GitHub style, default), Segoe UI Variable, Bahnschrift, Cascadia Mono, Consolas, Arial, Verdana, Inter if installed; only fonts on your PC are listed
 
   ![fonts](docs/fonts.png)
 - Resize with Ctrl + wheel, by dragging the corner, or from the menu (60 to 220 %); below ~80 % the text keeps a readable size and the layout narrows, with short labels (GPT / CLAUDE, 2h)
 - **Pin to desktop** like Rainmeter's "On desktop" (stays after Win+D), Always on top, or click-through overlay
 - Light animations (gliding bars, shimmer, pulse when full), can be turned off
-- Plain WinForms (.NET 8) + a small Python collector, about 70 MB RAM
+- Plain WinForms (.NET 8) + a small Python collector, about 70 MB RAM (see [How light is it?](#how-light-is-it))
 
 ![Light theme](docs/quota-widget-light.png)
 
@@ -96,6 +110,22 @@ export VPS_KEY=~/.ssh/your_key
 The widget runs `collector.py` there over SSH (`python3 -`, key login only, `BatchMode=yes`). Nothing is written on the server.
 
 For xKiro put the key in `~/.config/xkiro/key` (or set `XKIRO_KEY_FILE`), and set `XKIRO_CODEX_HOMES` to the Codex homes that route through xKiro if they are not in `~/.config/xkiro/codex/*`.
+
+## How light is it?
+
+Measured on a 16-thread laptop (60-second average, both widgets running side by side, animations on):
+
+| Process | CPU (share of the whole PC) | RAM |
+|---|---|---|
+| AI Quota HUD | about 1-2 % | about 70 MB |
+| System HUD | about 0.8 % | about 85 MB |
+| SensorBridge (optional, temperatures) | about 0.1 % | about 27 MB |
+
+Want it lighter?
+- Right-click → **Show → Animations** off: the biggest saving; the widget then only redraws when a value changes
+- AI Quota HUD: **Refresh every** 10 or 30 min (the collector runs once per refresh); Lite edition instead of Full
+- System HUD: hide the **60 s history graph** or **Threads + memory**; turn off **Network, ping + disk** if you do not need it
+- Close SensorBridge if you do not need temperatures
 
 ## Limits
 
@@ -137,6 +167,30 @@ Want a feature or found a bug? Tell me either way, all ideas welcome:
 Build เอง: ลง .NET 8 SDK และ Python 3 แล้วรัน `dotnet publish -c Release -o publish`
 
 **อยากได้ฟีเจอร์อะไรหรือเจอบั๊ก** บอกได้ทั้ง [เปิด issue บน GitHub](https://github.com/Pakapong26/ai-quota-hud/issues) หรือแท็ก / DM มาที่ X [@Pakapong26](https://x.com/Pakapong26) ยินดีรับทุกไอเดียครับ
+
+**กินเครื่องแค่ไหน:** วัดบนโน้ตบุ๊ก 16 เธรด เปิดคู่กัน มีแอนิเมชัน: AI Quota HUD ราว 1-2% CPU / 70 MB, System HUD ราว 0.8% / 85 MB, SensorBridge ราว 0.1% / 27 MB อยากให้เบาลง: ปิด Animations (ลดได้มากสุด), ตั้ง Refresh every 10-30 นาที, ใช้รุ่น Lite, ซ่อนกราฟหรือแถวเน็ต และปิด SensorBridge ถ้าไม่ต้องการอุณหภูมิ
+
+## 简体中文
+
+Windows 桌面小部件，显示每个 Codex / ChatGPT、xKiro 和 Claude Code 账号还剩多少 AI 额度（本机和 VPS 都可以），使用 **Claude Code** 制作。
+
+- **不消耗额度**：不调用任何 AI，只读取本地日志，从不打开登录凭据文件
+- 显示 5 小时 / 7 天 / 30 天窗口剩余百分比和重置倒计时；xKiro 显示剩余金额、每日免费额度和钱包
+- 检测提前（奖励）重置；★ USE 标出当前最适合使用的账号
+- 标题栏标签页 **ALL / OPENAI / ANTHROPIC**：OpenAI 按套餐分组（TEAM / PLUS / FREE）+ xKiro + 其他，Anthropic 按模型分组（OPUS / SONNET / HAIKU）
+- 风险颜色与主题无关：蓝色正常，黄色剩余 ≤30 %，红色剩余 ≤10 %，绿色可用，并配有符号（⚠ ✓ ✕ ⏱）
+- 两个版本：**Lite**（简洁）和 **Full**（Windows 通知、紧凑行、7 天曲线、按当前速度预计何时用完），右键 → Edition 随时切换
+- 字体选择、边框（完整 / 淡 / 无）、缩小后文字仍清晰；行名称可在 `%APPDATA%\QuotaWidget\names.txt` 中自定义
+- 与 [System HUD](https://github.com/Pakapong26/system-hud-widget) 组合使用：自动吸附，「Group」模式下一起移动和缩放，宽度一致，共用颜色与字体，只保留一个带日期的时钟
+
+**下载：** [最新 Release](https://github.com/Pakapong26/ai-quota-hud/releases/latest)，无需编译
+- `standalone`：解压后直接运行 `QuotaWidget.exe`（需要 Python 3）
+- `framework`：体积小，需要 .NET 8 Desktop Runtime + Python 3
+- 把 `collector.py` 放在 exe 旁边，右键小部件进行设置
+
+**资源占用：** 约 1-2 % CPU、70 MB 内存。关闭动画、把刷新间隔设为 10-30 分钟或使用 Lite 版可以更省。
+
+**想要新功能或发现 bug？** 欢迎在 GitHub [提交 issue](https://github.com/Pakapong26/ai-quota-hud/issues)，或在 X 上 @ / 私信 [@Pakapong26](https://x.com/Pakapong26)。
 
 ## License
 

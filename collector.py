@@ -128,7 +128,8 @@ def xkiro():
 
 out = []
 for d in sorted(glob.glob(os.path.join(home, '.codex*'))):
-    if os.path.isdir(d) and os.path.isdir(os.path.join(d, 'sessions')):
+    # a home that is logged in but not used yet still gets a row ("no rate-limit data"), so a new account shows up at once
+    if os.path.isdir(d) and (os.path.isdir(os.path.join(d, 'sessions')) or os.path.exists(os.path.join(d, 'auth.json'))):
         out.append(codex(d))
 x = xkiro()
 if x: out.append(x)

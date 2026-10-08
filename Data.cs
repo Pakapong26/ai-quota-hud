@@ -19,6 +19,7 @@ sealed class Account
         get
         {
             if (Kind == "xkiro") return "xKiro";
+            if (Data.Alias(Source, Home) is string alias) return alias;
             var n = Home.TrimStart('.').Replace('_', '-');
             var pre = Kind == "codex" ? "codex" : "claude";
             n = n == pre ? "main" : n.StartsWith(pre + "-") ? n[(pre.Length + 1)..] : n;
@@ -38,6 +39,27 @@ sealed class Snapshot
 
 static class Data
 {
+    // Optional row names: %APPDATA%\QuotaWidget\names.txt, one "home=name" or "SOURCE/home=name" per line,
+    // e.g. "LAP/.codex=business" (only this PC's ~/.codex) or ".codex-oa=openai-team" (both PCs). Re-read when the file changes.
+    static readonly string NamesPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "QuotaWidget", "names.txt");
+    static Dictionary<string, string> aliases = new(StringComparer.OrdinalIgnoreCase);
+    static DateTime namesSeen;
+    public static string Alias(string source, string home)
+    {
+        try
+        {
+            var t = File.Exists(NamesPath) ? File.GetLastWriteTimeUtc(NamesPath) : DateTime.MinValue;
+            if (t != namesSeen)
+            {
+                namesSeen = t;
+                aliases = t == DateTime.MinValue ? new(StringComparer.OrdinalIgnoreCase) : File.ReadAllLines(NamesPath).Select(l => l.Split('=', 2)).Where(p => p.Length == 2 && !p[0].TrimStart().StartsWith("#"))
+                    .GroupBy(p => p[0].Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Last()[1].Trim(), StringComparer.OrdinalIgnoreCase);
+            }
+        }
+        catch { }
+        return aliases.TryGetValue($"{source}/{home}", out var a) || aliases.TryGetValue(home ?? "", out a) ? a : null;
+    }
+
     static string Dir => AppContext.BaseDirectory;
     static string Collector => Path.Combine(Dir, "collector.py");
 

@@ -50,7 +50,7 @@ sealed class QuotaForm : Form
     {
         var m = (model ?? "").ToLowerInvariant();
         foreach (var f in new[] { "opus", "sonnet", "haiku" }) if (m.Contains(f)) return f.ToUpperInvariant();
-        return m.Length == 0 ? "UNKNOWN MODEL" : m.Replace("claude-", "").ToUpperInvariant();
+        return m.Length == 0 ? "NO RECENT USE" : m.Replace("claude-", "").ToUpperInvariant();
     }
     bool Notify => full && notify; bool Compact => full && compact; bool Spark => full && spark;
 
@@ -88,6 +88,9 @@ sealed class QuotaForm : Form
         ("inter", "Inter  (if installed)", "Inter SemiBold", "Inter", "Inter SemiBold", 0.95f),
     };
     string fontKey = "segoe";
+    bool themeBars;                         // themeBars: "fine" bars in the theme colour (System HUD look) instead of blue
+    Point savedLoc;
+    int frame;                                              // 0 full rim + brackets, 1 faint rim, 2 no frame
     Font fTitle, fName, fSmall, fNum, fBig;
     static readonly HashSet<string> Installed = new(new System.Drawing.Text.InstalledFontCollection().Families.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
     static bool HasSet((string key, string label, string bold, string text, string num, float k) s) => Installed.Contains(s.bold) && Installed.Contains(s.text);
@@ -105,7 +108,9 @@ sealed class QuotaForm : Form
 
     const int BaseW = 430, SubH = 24, HeadH = 20;
     float Tb => Math.Clamp(0.8f / size, 1f, 1.45f);
-    int W => (int)Math.Round(BaseW / Tb);
+    float baseW = BaseW;
+    int hudSide;                                             // linked: 1 = this sits under System HUD, -1 = above it, 0 = apart / side by side                                     // narrower when linked under System HUD, to match its width
+    int W => (int)Math.Round(baseW / Tb);
     bool Narrow => W < 380;
     int RowH => Compact ? 22 : 42;
     sealed record Row(string Kind, Account A, string Title);          // Kind: head | quota | claude
@@ -163,7 +168,7 @@ sealed class QuotaForm : Form
         }
         else if (tab == "anthropic")
         {
-            var cl = acc.Where(a => a.Kind == "claude").OrderByDescending(a => a.Tok24h).ToList();
+            var cl = acc.Where(a => a.Kind == "claude" && (showInactive || a.Tok7d > 0)).OrderByDescending(a => a.Tok24h).ToList();   // same filter as ALL
             foreach (var fam in cl.Select(a => Family(a.Model)).Distinct())
                 Group($"CLAUDE  ·  {fam}  ·  TOKENS 5h · 24h", cl.Where(a => Family(a.Model) == fam), "claude");
         }
@@ -177,6 +182,7 @@ sealed class QuotaForm : Form
     public QuotaForm()
     {
         FormBorderStyle = FormBorderStyle.None; ShowInTaskbar = false; StartPosition = FormStartPosition.Manual;
+        base.Text = WidgetDock.QuotaTitle;                        // System HUD finds this window by its title to dock with it
         LoadSettings(); BuildFonts(); ApplySize();
         if (Location == Point.Empty) { var wa = Screen.PrimaryScreen.WorkingArea; Location = new Point(wa.Right - Width - 24, wa.Top + 260); }
         var menu = BuildMenu(); ContextMenuStrip = menu;
@@ -198,18 +204,23 @@ sealed class QuotaForm : Form
             Cursor = InGrip(e.Location) ? Cursors.SizeNWSE : OnBonusHeader(e.Location) || tabRects.Any(tr => tr.r.Contains(e.X / scale, e.Y / scale)) ? Cursors.Hand : Cursors.Default;
             HoverTip(e.Location);
         };
-        MouseLeave += (_, _) => { tip.Hide(this); tipFor = null; };
+        MouseLeave += (_, _) => { if (Bounds.Contains(Cursor.Position)) return; tip.Hide(this); tipFor = null; };   // moving onto our own tip is not leaving
         MouseUp += (_, _) => { if (resizing) { resizing = false; Capture = false; SaveSettings(); } };
         MouseWheel += (_, e) =>
         {
             if ((ModifierKeys & Keys.Control) != 0) { size = Math.Clamp(size + (e.Delta > 0 ? 0.05f : -0.05f), 0.6f, 2.2f); ApplySize(); SaveSettings(); Render(); return; }
-            scrollTarget = Math.Clamp(scrollTarget - Math.Sign(e.Delta) * RowH, 0, MaxScroll); if (!anim.Enabled) anim.Start();
+            // step from one row top to the next, so a row is never left half under the tabs
+            var tops = new List<float> { 0 }; float acc = 0;
+            foreach (var row in rows) { acc += RowHeight(row); if (acc < MaxScroll) tops.Add(acc); }
+            tops.Add(MaxScroll);
+            scrollTarget = e.Delta < 0 ? tops.FirstOrDefault(v => v > scrollTarget + 0.5f, MaxScroll) : tops.LastOrDefault(v => v < scrollTarget - 0.5f, 0);
+            if (!anim.Enabled) anim.Start();
         };
         MouseDoubleClick += (_, _) => Refresh_();
 
-        tick.Tick += (_, _) => { if (DateTime.Now >= nextFetch && !fetching) Refresh_(); if (DateTime.Now.Second % 30 == 0) CheckAlerts(); if (!anim.Enabled) Render(); };
+        tick.Tick += (_, _) => { ApplyGroup(); FollowHud(); if (Location != savedLoc) SaveSettings(); if (DateTime.Now >= nextFetch && !fetching) Refresh_(); if (DateTime.Now.Second % 30 == 0) CheckAlerts(); if (!anim.Enabled) Render(); };
         anim.Tick += (_, _) => { phase = (phase + 0.012f) % 1f; appear = Math.Min(1f, appear + 0.06f); bool moving = Step(); if (!effects && !moving && appear >= 1) anim.Stop(); Render(); };
-        Shown += (_, _) => { SetClickThrough(clickThrough); ApplyPin(); Render(); tick.Start(); anim.Start(); Refresh_(); };
+        Shown += (_, _) => { ApplyGroup(); SetClickThrough(clickThrough); ApplyPin(); Render(); tick.Start(); anim.Start(); Refresh_(); };
         FormClosed += (_, _) => { SaveSettings(); tip.Dispose(); tray.Visible = false; tray.Dispose(); tick.Dispose(); anim.Dispose(); };
     }
 
@@ -241,7 +252,7 @@ sealed class QuotaForm : Form
             var proj = Projection(hit, win);
             lines.Add($"{WinLabel(win.mins)}  {Math.Max(0, 100 - used):0}% left  ·  {(wasReset ? "reset ✓" : win.reset > 0 ? "resets in " + Span(win.reset - Now) : "")}{(proj != null ? "  ·  " + proj : "")}");
         }
-        tip.Show(string.Join("\n", lines), this, p.X + 14, p.Y + 14);
+        tip.Show(string.Join("\n", lines), this, p.X + 16, p.Y + 22);   // clear of the pointer, or the tip blinks
     }
     void ApplySize() { scale = DeviceDpi / 96f * size * Tb; Size = new Size((int)(W * scale), (int)(H * scale)); }
 
@@ -272,6 +283,9 @@ sealed class QuotaForm : Form
         var m = new ContextMenuStrip { ShowCheckMargin = true, ShowImageMargin = false, Renderer = new ToolStripProfessionalRenderer(new MenuColors()), ForeColor = Color.FromArgb(232, 246, 255) };
         var mTheme = new ToolStripMenuItem("Colour theme");
         for (int i = 0; i < Themes.Length; i++) { int k = i; mTheme.DropDownItems.Add(Radio(Themes[i].name, () => theme == k, () => theme = k)); }
+        mTheme.DropDownItems.Add(new ToolStripSeparator());
+        mTheme.DropDownItems.Add(Radio("Bars: status blue", () => !themeBars, () => themeBars = false));
+        mTheme.DropDownItems.Add(Radio("Bars: theme colour (System HUD look)", () => themeBars, () => themeBars = true));
         var mMode = new ToolStripMenuItem("Dark / light");
         mMode.DropDownItems.Add(Radio("Dark", () => !light, () => light = false));
         mMode.DropDownItems.Add(Radio("Light", () => light, () => light = true));
@@ -282,6 +296,8 @@ sealed class QuotaForm : Form
             mBg.DropDownItems.Add(Radio(label, () => panelAlpha == a, () => panelAlpha = a));
         mBg.DropDownItems.Add(new ToolStripSeparator());
         mBg.DropDownItems.Add(Check("HUD corner brackets", () => corners, v => corners = v));
+        mBg.DropDownItems.Add(new ToolStripSeparator());
+        foreach (var (label, k) in new[] { ("Frame: full", 0), ("Frame: subtle", 1), ("Frame: none", 2) }) mBg.DropDownItems.Add(Radio(label, () => frame == k, () => frame = k));
         var mOp = new ToolStripMenuItem("Whole widget opacity");
         foreach (var (label, a) in new[] { ("100%", (byte)255), ("85%", (byte)217), ("70%", (byte)178), ("55%", (byte)140), ("40%", (byte)102), ("25%", (byte)64) })
             mOp.DropDownItems.Add(Radio(label, () => opacity == a, () => opacity = a));
@@ -312,6 +328,7 @@ sealed class QuotaForm : Form
 
         var miTop = Check("Always on top", () => TopMost && !pinDesktop, v => { pinDesktop = false; ApplyPin(); TopMost = v; });
         var miPin = Check("Pin to desktop (like Rainmeter)", () => pinDesktop, v => { pinDesktop = v; ApplyPin(); });
+        var miDock = GroupMenu();
         var mRows = new ToolStripMenuItem("Rows visible");
         foreach (var n in new[] { 3, 5, 7, 10 }) { int k = n; mRows.DropDownItems.Add(Radio($"{n} rows", () => visibleRows == k, () => { visibleRows = k; scrollTarget = Math.Min(scrollTarget, MaxScroll); ApplySize(); })); }
         var miThrough = Check("Click-through overlay (undo from tray icon)", () => clickThrough, v => SetClickThrough(v));
@@ -322,7 +339,7 @@ sealed class QuotaForm : Form
 
         m.Opening += (_, _) => RefreshChecks();
         foreach (var sub in new[] { mTheme, mMode, mBg, mOp, mSize, mRows, mRef, mShow, mSort, mEd, mFont }) sub.DropDownOpening += (_, _) => RefreshChecks();
-        m.Items.AddRange(new ToolStripItem[] { miNow, new ToolStripSeparator(), mEd, mSort, new ToolStripSeparator(), mTheme, mMode, mFont, mBg, mOp, mSize, mRows, mRef, mShow, new ToolStripSeparator(), miPin, miTop, miThrough, miStart,
+        m.Items.AddRange(new ToolStripItem[] { miNow, new ToolStripSeparator(), mEd, mSort, new ToolStripSeparator(), mTheme, mMode, mFont, mBg, mOp, mSize, mRows, mRef, mShow, new ToolStripSeparator(), miPin, miTop, miDock, miThrough, miStart,
             new ToolStripSeparator(), new ToolStripMenuItem("Exit", null, (_, _) => Close()) });
         return m;
     }
@@ -363,7 +380,7 @@ sealed class QuotaForm : Form
         return t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours:00}h" : t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes:00}m" : $"{t.Minutes}m {t.Seconds:00}s";
     }
     static string Tok(double n) => n >= 1e9 ? $"{n / 1e9:0.00}B" : n >= 1e6 ? $"{n / 1e6:0.00}M" : n >= 1e3 ? $"{n / 1e3:0.0}k" : $"{n:0}";
-    Color Level(double usedPct) => usedPct >= 90 ? Red : usedPct >= 70 ? Amber : Blue;
+    Color Level(double usedPct) => usedPct >= 90 ? Red : usedPct >= 70 ? Amber : themeBars ? A1 : Blue;
     static string LeftMark(double usedPct) => usedPct >= 90 ? "⚠ " : "";
 
     // ease every bar toward its target; true while something is still moving
@@ -406,7 +423,7 @@ sealed class QuotaForm : Form
     {
         using var f = new QuotaForm();
         foreach (var kv in opts.Split(';').Select(x => x.Split('=')).Where(x => x.Length == 2))
-            switch (kv[0]) { case "theme": f.theme = int.Parse(kv[1]); break; case "light": f.light = kv[1] == "1"; break; case "bg": f.bg = int.Parse(kv[1]); break; case "alpha": f.panelAlpha = int.Parse(kv[1]); break; case "full": f.full = kv[1] == "1"; break; case "compact": f.compact = kv[1] == "1"; break; case "bonus": f.bonusOpen = kv[1] == "1"; break; case "sort": f.sortMode = int.Parse(kv[1]); break; case "tab": f.tab = kv[1]; break; case "size": f.size = int.Parse(kv[1]) / 100f; break; case "font": f.fontKey = kv[1]; f.BuildFonts(); break; }
+            switch (kv[0]) { case "theme": f.theme = int.Parse(kv[1]); break; case "light": f.light = kv[1] == "1"; break; case "bg": f.bg = int.Parse(kv[1]); break; case "alpha": f.panelAlpha = int.Parse(kv[1]); break; case "full": f.full = kv[1] == "1"; break; case "compact": f.compact = kv[1] == "1"; break; case "bonus": f.bonusOpen = kv[1] == "1"; break; case "sort": f.sortMode = int.Parse(kv[1]); break; case "tab": f.tab = kv[1]; break; case "size": f.size = int.Parse(kv[1]) / 100f; break; case "font": f.fontKey = kv[1]; f.BuildFonts(); break; case "tbars": f.themeBars = kv[1] == "1"; break; case "frame": f.frame = int.Parse(kv[1]); break; }
         f.snap = Data.Fetch(); f.CheckBonus(); f.RecordUsage(); f.BuildRows(); f.appear = 1; f.ApplySize(); for (int i = 0; i < 200 && f.Step(); i++) { }
         using var bmp = new Bitmap(f.Width, f.Height, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
@@ -437,7 +454,7 @@ sealed class QuotaForm : Form
             else { using var catchAll = new SolidBrush(Color.FromArgb(1, 0, 0, 0)); g.FillPath(catchAll, path); }
             if (bg != 3)
             {
-                using var rim = new LinearGradientBrush(r, Color.FromArgb(150, A1), Color.FromArgb(120, A2), 0f); using var pen = new Pen(rim, 1f); g.DrawPath(pen, path);
+                using var rim = new LinearGradientBrush(r, Color.FromArgb(frame == 0 ? 150 : 40, A1), Color.FromArgb(frame == 0 ? 120 : 30, A2), 0f); using var pen = new Pen(rim, 1f); if (frame < 2) g.DrawPath(pen, path);
                 if (effects)   // a soft light running along the top edge
                 {
                     float x = -80 + (w + 160) * phase;
@@ -446,7 +463,7 @@ sealed class QuotaForm : Form
                 }
             }
         }
-        if (corners)
+        if (corners && frame == 0)
         {
             using var br = new Pen(Color.FromArgb(220, A1), 1.6f); float L = 12;
             g.DrawLines(br, new[] { new PointF(6, 6 + L), new PointF(6, 6), new PointF(6 + L, 6) });
@@ -454,7 +471,9 @@ sealed class QuotaForm : Form
         }
 
         using var ink = new SolidBrush(Color.FromArgb((int)(255 * Math.Max(0.15f, appear)), Ink)); using var dim = new SolidBrush(Dim); using var acc = new SolidBrush(AccentText(A1)); using var acc2 = new SolidBrush(AccentText(A2));
-        var clock = DateTime.Now.ToString(Narrow ? "HH:mm" : "HH:mm:ss");
+        // linked as one panel: the top widget shows one clock with the date, the lower one none
+        var clock = hudSide == 1 ? "" : hudSide == -1 ? DateTime.Now.ToString(Narrow ? "ddd dd MMM  HH:mm" : "ddd dd MMM  HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) : DateTime.Now.ToString(Narrow ? "HH:mm" : "HH:mm:ss");
+        if (hudSide == -1 && 20 + TabsWidth(g, true) >= w - 28 - g.MeasureString(clock, fNum).Width) clock = DateTime.Now.ToString("HH:mm");
         float clockX = w - 20 - g.MeasureString(clock, fNum).Width, titleW = g.MeasureString("AI QUOTA", fTitle).Width + 6;
         bool showTitle = 20 + titleW + TabsWidth(g, Narrow) < clockX - 8, shortTabs = Narrow || 20 + TabsWidth(g, false) >= clockX - 8;
         if (showTitle && !shortTabs) Text(g, "AI QUOTA", fTitle, dim, 20, 10, floating);
@@ -513,7 +532,7 @@ sealed class QuotaForm : Form
         var upd = fetching ? "updating…" : snap == null ? "" : Narrow ? $"{fresh}upd {snap.Time:HH:mm} · next {Span((nextFetch - DateTime.Now).TotalSeconds)}" : $"{fresh}upd {snap.Time:HH:mm} · next {Span((nextFetch - DateTime.Now).TotalSeconds)} · no quota used";
         if (w - 20 - g.MeasureString(upd, fSmall).Width < srcEnd) upd = upd.Replace(" · no quota used", "");
         using (var ub = new SolidBrush(fresh == "" ? Dim : AccentText(fresh == "⚠ " ? Red : Amber))) Text(g, upd, fSmall, ub, w - 20 - g.MeasureString(upd, fSmall).Width, fy, floating);
-        using (var grip = new Pen(Color.FromArgb(110, A1), 1f)) { g.DrawLine(grip, w - 5, h - 12, w - 12, h - 5); g.DrawLine(grip, w - 5, h - 8, w - 8, h - 5); }
+        if (frame < 2) using (var grip = new Pen(Color.FromArgb(frame == 0 ? 110 : 45, A1), 1f)) { g.DrawLine(grip, w - 5, h - 12, w - 12, h - 5); g.DrawLine(grip, w - 5, h - 8, w - 8, h - 5); }
     }
 
     List<string> Providers()
@@ -657,7 +676,8 @@ sealed class QuotaForm : Form
     {
         float x = 20 + SourceTag(g, a.Source, 20, y, sh);
         if (a.Older) ink = dim;
-        var name = a.Name.Length > 12 ? a.Name[..11] + "…" : a.Name;
+        var name = a.Name;                                   // shortened with "…" until it clears the window label
+        while (name.Length > 3 && x + g.MeasureString(name, fName).Width + (a == best ? 18 : 0) > w * 0.40f - 28) name = name[..^2] + "…";
         Text(g, name, fName, ink, x, y - 1, sh); x += g.MeasureString(name, fName).Width + 2;
         if (a == best) Chip(g, "★", x, y, Green, sh, out _);
         if (a.Win.Count == 0)
@@ -685,11 +705,12 @@ sealed class QuotaForm : Form
         Text(g, c.Name, fName, ink, x, y - 1, sh); x += g.MeasureString(c.Name, fName).Width + 4;
         var model = (c.Model ?? "").Replace("claude-", "");
         if (model.Length > 0 && x + g.MeasureString(model, fSmall).Width < w * 0.52f - 4) Text(g, model, fSmall, dim, x, y, sh);
-        float tx = w * 0.52f, tw = w * 0.15f, v = Val($"{c.Source}{c.Home}c");
+        var t = $"{Tok(c.Tok5h)} · {Tok(c.Tok24h)}";
+        float numX = w - 20 - g.MeasureString(t, fNum).Width;
+        float tx = w * 0.52f, tw = Math.Max(10, Math.Min(w * 0.15f, numX - 8 - tx)), v = Val($"{c.Source}{c.Home}c");   // the bar stops before the numbers
         using (var track = new SolidBrush(Color.FromArgb(light ? 30 : 40, A2))) g.FillRectangle(track, tx, y + 5, tw, 5);
         using (var lb = new LinearGradientBrush(new RectangleF(tx, y + 5, tw + 1, 5), A2, A1, 0f)) g.FillRectangle(lb, tx, y + 5, Math.Max(0.5f, tw * v / 100f), 5);
-        var t = $"{Tok(c.Tok5h)} · {Tok(c.Tok24h)}";
-        using var nb = new SolidBrush(AccentText(A2)); Text(g, t, fNum, nb, w - 20 - g.MeasureString(t, fNum).Width, y - 3, sh);
+        using var nb = new SolidBrush(AccentText(A2)); Text(g, t, fNum, nb, numX, y - 3, sh);
     }
 
     void Text(Graphics g, string t, Font f, Brush b, float x, float y, bool shadow)
@@ -837,6 +858,7 @@ sealed class QuotaForm : Form
     // last 7 days of the tightest window, one point per reading; the line drops back at each reset
     void Sparkline(Graphics g, Account a, float x, float y, float w, float h)
     {
+        if (a.Win.Count == 0) return;                            // logged in, no rate-limit reading yet
         var win = a.Win.OrderByDescending(v => Eff(v).used).First();
         if (!usage.TryGetValue($"{a.Source}{a.Home}|{win.mins}", out var ls) || ls.Count < 2) return;
         double t0 = Now - 7 * 86400;
@@ -881,6 +903,7 @@ sealed class QuotaForm : Form
     }
     protected override void WndProc(ref Message m)
     {
+        if (m.Msg == 0x0216) WidgetDock.OnMoving(Handle, WidgetDock.HudTitle, link, m.LParam);   // WM_MOVING: snap to / drag the other widget
         if (pinDesktop && m.Msg == 0x46)   // WM_WINDOWPOSCHANGING: stay under every other window
         {
             var wp = Marshal.PtrToStructure<WINDOWPOS>(m.LParam);
@@ -892,6 +915,79 @@ sealed class QuotaForm : Form
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string name);
     [DllImport("user32.dll")] static extern IntPtr SetWindowLongPtr(IntPtr h, int i, IntPtr v);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+
+    // ---------------- group mode (with System HUD) ----------------
+    bool link, sameStyle = true, applyingGroup, groupRead;
+    void PublishGroup()
+    {
+        if (applyingGroup || !groupRead) return;             // startup saves wait until the other widget's state has been read
+        var kv = new Dictionary<string, string> { ["link"] = link ? "1" : "0", ["same"] = sameStyle ? "1" : "0" };
+        if (link) kv["size"] = ((int)Math.Round(size * 100)).ToString();
+        if (link && sameStyle) { kv["frame"] = frame.ToString(); kv["theme"] = Themes[theme].name; kv["bg"] = bg.ToString(); kv["alpha"] = panelAlpha.ToString(); kv["opacity"] = opacity.ToString(); kv["font"] = fontKey; }
+        Group.Write("quota", kv);
+    }
+    void ApplyGroup()
+    {
+        groupRead = true;
+        var kv = Group.ReadNew("quota");
+        if (kv == null) return;
+        string V(string k) => kv.TryGetValue(k, out var v) ? v : null;
+        applyingGroup = true;
+        try
+        {
+            link = V("link") == "1"; sameStyle = V("same") != "0";
+            if (link && int.TryParse(V("size"), out var sz) && Math.Abs(sz / 100f - size) > 0.004f) { size = Math.Clamp(sz / 100f, 0.6f, 2.2f); BuildFonts(); ApplySize(); }
+            if (link && sameStyle)
+            {
+                int ti = Array.FindIndex(Themes, x => x.name == V("theme")); if (ti >= 0) theme = ti;
+                if (int.TryParse(V("frame"), out var fr)) frame = Math.Clamp(fr, 0, 2);
+                if (int.TryParse(V("bg"), out var b)) bg = Math.Clamp(b, 0, Backgrounds.Length - 1);
+                if (int.TryParse(V("alpha"), out var a)) panelAlpha = Math.Clamp(a, 0, 255);
+                if (byte.TryParse(V("opacity"), out var o)) opacity = Math.Max((byte)40, o);
+                if (V("font") is string f && f != fontKey) { fontKey = f; BuildFonts(); }
+                themeBars = true;                                   // bars in the theme colour, like the HUD rings
+            }
+            SaveSettings(); Render();
+        }
+        finally { applyingGroup = false; }
+    }
+    ToolStripMenuItem GroupMenu()
+    {
+        var mg = new ToolStripMenuItem("Group with System HUD");
+        mg.DropDownItems.Add(Check("Linked: move + resize together", () => link, v => { link = v; if (v) PublishGroup(); }));
+        mg.DropDownItems.Add(Check("Same colours + font", () => sameStyle, v => sameStyle = v));
+        mg.DropDownItems.Add(new ToolStripSeparator());
+        mg.DropDownItems.Add(new ToolStripMenuItem("Split apart", null, (_, _) => { link = false; SaveSettings(); RefreshChecks(); }));
+        mg.DropDownItems.Add(new ToolStripMenuItem("(drag the two close together: they snap edge to edge)") { Enabled = false });
+        mg.DropDownOpening += (_, _) => RefreshChecks();
+        return mg;
+    }
+
+    // Linked and stacked above/below System HUD: take its width and stay against its edge, so the two read as one panel.
+    // Side by side: keep the tops level. Not linked: back to the normal width.
+    void FollowHud()
+    {
+        var p = link ? WidgetDock.RectOf(WidgetDock.HudTitle) : null;
+        float want = BaseW; hudSide = 0;
+        if (p is Rectangle hr)
+        {
+            var me = Bounds;
+            bool below = Math.Abs(me.Top - hr.Bottom) < 24, above = Math.Abs(me.Bottom - hr.Top) < 24;
+            bool overlapX = me.Right > hr.Left && me.Left < hr.Right;
+            if ((below || above) && overlapX)
+            {
+                hudSide = below ? 1 : -1;
+                want = Math.Max(300, hr.Width / (DeviceDpi / 96f * size));
+                if (Math.Abs(want - baseW) > 0.5f) { baseW = want; ApplySize(); Render(); }
+                var to = new Point(hr.Left, below ? hr.Bottom : hr.Top - Height);
+                if (Location != to) { Location = to; Render(); }
+                return;
+            }
+            if ((Math.Abs(me.Left - hr.Right) < 24 || Math.Abs(me.Right - hr.Left) < 24) && me.Top != hr.Top) { Location = new Point(me.Left, hr.Top); Render(); }
+        }
+        if (Math.Abs(want - baseW) > 0.5f) { baseW = want; ApplySize(); Render(); }
+    }
 
     // ---------------- settings ----------------
     void LoadSettings()
@@ -905,7 +1001,7 @@ sealed class QuotaForm : Form
             theme = Math.Clamp(I("theme", 0), 0, Themes.Length - 1); bg = Math.Clamp(I("bg", 0), 0, Backgrounds.Length - 1); panelAlpha = Math.Clamp(I("alpha", 215), 0, 255);
             size = Math.Clamp(I("size", 100), 60, 220) / 100f; light = I("light", 0) == 1; effects = I("fx", 1) == 1; showInactive = I("inactive", 0) == 1;
             showClaude = I("claude", 1) == 1; corners = I("corners", 1) == 1; clickThrough = I("through", 0) == 1; refreshMin = Math.Clamp(I("refresh", 5), 1, 60); pinDesktop = I("pin", 0) == 1; visibleRows = Math.Clamp(I("rows", 5), 3, 12);
-            full = I("full", EditionDefault()) == 1; bonusOpen = I("bonus", 0) == 1; notify = I("notify", 1) == 1; compact = I("compact", 0) == 1; spark = I("spark", 1) == 1; sortMode = Math.Clamp(I("sort", 0), 0, Sorts.Length - 1); tab = kv.TryGetValue("tab", out var tb) ? tb : "all"; fontKey = kv.TryGetValue("font", out var fk) ? fk : "segoe";
+            full = I("full", EditionDefault()) == 1; bonusOpen = I("bonus", 0) == 1; notify = I("notify", 1) == 1; compact = I("compact", 0) == 1; spark = I("spark", 1) == 1; sortMode = Math.Clamp(I("sort", 0), 0, Sorts.Length - 1); tab = kv.TryGetValue("tab", out var tb) ? tb : "all"; fontKey = kv.TryGetValue("font", out var fk) ? fk : "segoe"; link = I("link", 0) == 1; sameStyle = I("same", 1) == 1; themeBars = I("tbars", 0) == 1; frame = Math.Clamp(I("frame", 0), 0, 2);
         }
         catch { TopMost = true; full = EditionDefault() == 1; }
     }
@@ -921,11 +1017,12 @@ sealed class QuotaForm : Form
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(cfgPath));
+            Directory.CreateDirectory(Path.GetDirectoryName(cfgPath)); savedLoc = Location;
             File.WriteAllLines(cfgPath, new[] { $"x={Left}", $"y={Top}", $"top={(TopMost ? 1 : 0)}", $"opacity={opacity}", $"theme={theme}", $"bg={bg}", $"alpha={panelAlpha}",
                 $"size={(int)Math.Round(size * 100)}", $"light={(light ? 1 : 0)}", $"fx={(effects ? 1 : 0)}", $"inactive={(showInactive ? 1 : 0)}", $"claude={(showClaude ? 1 : 0)}",
                 $"corners={(corners ? 1 : 0)}", $"through={(clickThrough ? 1 : 0)}", $"refresh={refreshMin}", $"pin={(pinDesktop ? 1 : 0)}", $"rows={visibleRows}",
-                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}", $"font={fontKey}" });
+                $"full={(full ? 1 : 0)}", $"bonus={(bonusOpen ? 1 : 0)}", $"notify={(notify ? 1 : 0)}", $"compact={(compact ? 1 : 0)}", $"spark={(spark ? 1 : 0)}", $"sort={sortMode}", $"tab={tab}", $"font={fontKey}", $"link={(link ? 1 : 0)}", $"same={(sameStyle ? 1 : 0)}", $"tbars={(themeBars ? 1 : 0)}", $"frame={frame}" });
+            PublishGroup();
         }
         catch { }
     }
